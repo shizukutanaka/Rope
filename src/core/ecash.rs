@@ -32,15 +32,59 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
+
+/// 使用済み nullifier の追跡。
+///
+/// FIFO 順序 (容量上限での最古排出) と O(1) 二重使用検出を両立する。
+/// 旧実装は `Vec<String>` で `contains` が O(n) だったため、受信ホットパスで
+/// 履歴件数に比例して劣化していた。集合で membership を O(1) 化しつつ、
+/// `order` で排出順序を保つ。
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct SpentNullifiers {
+    /// 挿入順 (容量超過時に古い順へ排出するため)
+    order: VecDeque<String>,
+    /// 二重使用検出用の集合 (O(1) lookup)
+    set: HashSet<String>,
+}
+
+impl SpentNullifiers {
+    /// 既に使用済みかを O(1) で判定。
+    pub fn contains(&self, nullifier: &str) -> bool {
+        self.set.contains(nullifier)
+    }
+
+    /// nullifier を記録。容量上限を超えたら最古を排出する。
+    /// 重複記録は no-op (件数を増やさない)。
+    pub fn record(&mut self, nullifier: String, capacity: usize) {
+        if self.set.insert(nullifier.clone()) {
+            self.order.push_back(nullifier);
+        }
+        while self.order.len() > capacity {
+            if let Some(old) = self.order.pop_front() {
+                self.set.remove(&old);
+            }
+        }
+    }
+
+    /// 記録済み nullifier 数。
+    pub fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    /// 記録が空か。
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+}
 
 /// ecash マネージャ (ウォレット + escrow + streaming の複合)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EcashManager {
     /// 自分の ecash 残高 (未使用トークン)
     pub wallet: Wallet,
-    /// 使用済みトークン(二重使用防止のナル履歴)
-    pub spent_nullifiers: Vec<String>,
+    /// 使用済みトークン(二重使用防止のナル履歴、FIFO 容量制限 + O(1) 検出)
+    pub spent_nullifiers: SpentNullifiers,
     /// 登録された mint
     pub mints: Vec<Mint>,
     /// アクティブ escrow (Rope ジョブ単位)
@@ -64,7 +108,7 @@ impl Default for EcashManager {
     fn default() -> Self {
         Self {
             wallet: Wallet::default(),
-            spent_nullifiers: Vec::new(),
+            spent_nullifiers: SpentNullifiers::default(),
             mints: Vec::new(),
             escrows: Vec::new(),
             escrow_history: Vec::new(),
@@ -487,13 +531,10 @@ impl EcashManager {
         let spent_total: u64 = spent.iter().map(|p| p.amount_sats).sum();
         self.wallet.total_sats = self.wallet.total_sats.saturating_sub(spent_total);
 
-        // nullifier 記録
+        // nullifier 記録 (FIFO 容量制限 + O(1) 二重使用検出)
         for p in &spent {
-            self.spent_nullifiers.push(p.nullifier.clone());
-        }
-        if self.spent_nullifiers.len() > self.config.max_nullifier_history {
-            let drop_count = self.spent_nullifiers.len() - self.config.max_nullifier_history;
-            self.spent_nullifiers.drain(..drop_count);
+            self.spent_nullifiers
+                .record(p.nullifier.clone(), self.config.max_nullifier_history);
         }
 
         self.stats.total_proofs_spent_sats += spent_total;
@@ -1120,11 +1161,36 @@ mod tests {
         m2.receive_proofs(spent.clone()).unwrap();
         // 改めて受け取り試みる → まだ m2 の nullifier 履歴に入ってない
         // このテストはマネージャ間ではなく、同一マネージャで spend 後の再 receive
-        m.spent_nullifiers
-            .extend(spent.iter().map(|p| p.nullifier.clone()));
+        let cap = m.config.max_nullifier_history;
+        for p in &spent {
+            m.spent_nullifiers.record(p.nullifier.clone(), cap);
+        }
         let result = m.receive_proofs(spent);
         assert!(result.is_err());
         assert_eq!(m.stats.double_spend_attempts_blocked, 1);
+    }
+
+    /// SpentNullifiers: O(1) membership + FIFO 容量排出 + 重複 no-op
+    #[test]
+    fn test_spent_nullifiers_fifo_capacity_and_membership() {
+        let mut s = SpentNullifiers::default();
+        assert!(s.is_empty());
+        // capacity 3 で 3 件記録
+        for n in ["a", "b", "c"] {
+            s.record(n.to_string(), 3);
+        }
+        assert_eq!(s.len(), 3);
+        assert!(s.contains("a") && s.contains("b") && s.contains("c"));
+
+        // 4 件目で最古 "a" が FIFO 排出される
+        s.record("d".to_string(), 3);
+        assert_eq!(s.len(), 3);
+        assert!(!s.contains("a"), "最古 nullifier は容量超過で排出される");
+        assert!(s.contains("b") && s.contains("c") && s.contains("d"));
+
+        // 重複記録は件数を増やさない (no-op)
+        s.record("d".to_string(), 3);
+        assert_eq!(s.len(), 3);
     }
 
     #[test]
