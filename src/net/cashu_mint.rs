@@ -413,8 +413,7 @@ use crate::core::ecash::{Mint as EcashMint, Proof};
 ///
 /// 入力:
 ///   - `mint_id`: rope 内 mint registry の ID
-///   - `secrets`: 自分が出力した blinded message に対応する 32 byte secret 群
-///                (mint_tokens 呼出側で生成保管)
+///   - `secrets`: 自分が出力した blinded message に対応する 32 byte secret 群 (mint_tokens 呼出側で生成保管)
 ///   - `signatures`: mint からの応答
 ///
 /// 出力: ecash wallet に格納可能な Proof 群
@@ -516,40 +515,50 @@ mod tests {
     #[cfg(feature = "http")]
     #[test]
     fn test_url_validation_rejects_garbage() {
-        let mut cfg = CashuClientConfig::default();
-        cfg.mint_url = "not a url".to_string();
+        let cfg = CashuClientConfig {
+            mint_url: "not a url".to_string(),
+            ..Default::default()
+        };
         assert!(CashuClient::new(cfg).is_err());
     }
 
     #[cfg(feature = "http")]
     #[test]
     fn test_url_validation_rejects_ftp() {
-        let mut cfg = CashuClientConfig::default();
-        cfg.mint_url = "ftp://example.com".to_string();
+        let cfg = CashuClientConfig {
+            mint_url: "ftp://example.com".to_string(),
+            ..Default::default()
+        };
         assert!(CashuClient::new(cfg).is_err());
     }
 
     #[cfg(feature = "http")]
     #[test]
     fn test_url_validation_accepts_https() {
-        let mut cfg = CashuClientConfig::default();
-        cfg.mint_url = "https://mint.example.com".to_string();
+        let cfg = CashuClientConfig {
+            mint_url: "https://mint.example.com".to_string(),
+            ..Default::default()
+        };
         assert!(CashuClient::new(cfg).is_ok());
     }
 
     #[cfg(feature = "http")]
     #[test]
     fn test_url_validation_accepts_http_for_local() {
-        let mut cfg = CashuClientConfig::default();
-        cfg.mint_url = "http://localhost:3338".to_string();
+        let cfg = CashuClientConfig {
+            mint_url: "http://localhost:3338".to_string(),
+            ..Default::default()
+        };
         assert!(CashuClient::new(cfg).is_ok());
     }
 
     #[cfg(feature = "http")]
     #[test]
     fn test_endpoint_construction_dedupes_slash() {
-        let mut cfg = CashuClientConfig::default();
-        cfg.mint_url = "https://mint.example.com/".to_string();
+        let cfg = CashuClientConfig {
+            mint_url: "https://mint.example.com/".to_string(),
+            ..Default::default()
+        };
         let client = CashuClient::new(cfg).unwrap();
         assert_eq!(
             client.endpoint("/v1/info"),

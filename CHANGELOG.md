@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-06-05
+
+### Fixed
+- **streaming 課金のオーバーフロー耐性**: `tick_stream` / `close_stream` の
+  `elapsed * rate` と残額計算を `saturating_mul` / `saturating_sub` 化。
+  クロックスキューや長時間放置でも panic せず remaining で頭打ち
+  (`src/core/ecash.rs`、同モジュール内の他箇所と一貫)
+- **intent history のパニック修正**: `complete()` の `drain(..100)` は
+  `max_history < 100` で範囲外 panic していた。超過分のみ drain するよう修正
+  (`src/core/intent.rs`、`submit` 側の既存実装と一貫)
+- **整数オーバーフロー防御**: `target_ms * 4` と `num_items * tokens` を
+  `saturating_mul` 化 (`src/core/intent.rs`)
+- **UTF-8 境界 panic 修正**: 表示用 ID 切り詰めの `&s[..n]` バイトスライスを
+  char ベースの共通ヘルパー `core::short` に統一 (intent / confidential /
+  session)。マルチバイト ID でも panic しない
+- **クロスプラットフォーム stale lock 検出**: `LockGuard` の生存判定は Linux
+  専用の `/proc/<pid>` のみで、非 Linux では全ロックを stale と誤判定して
+  相互排他を壊していた。非 Linux 向けに mtime ベースの保守的フォールバックを
+  追加 (`src/core/config.rs`)
+
+### Security
+- **QR ペアリング MAC を blake3 keyed-hash に置換**: 非暗号学的な FNV を MAC
+  として使っていたため payload 偽造を防げなかった。`blake3::keyed_hash`
+  (正式な keyed MAC) へ置換、依存追加なし (blake3 は既存依存)
+  (`src/core/pair.rs`)
+- **attestation evidence digest の強化**: FNV を blake3 に置換し、report ごとの
+  nonce を含めて再 attestation でも digest が変わるようにした (リプレイ識別性)。
+  実 TEE 署名検証は引き続き v0.3 で結線、`unverified-digest:` プレフィックス維持
+  (`src/core/confidential.rs`)
+
+### Changed
+- clippy `--all-targets -- -D warnings` を完全クリーンに (manual_div_ceil /
+  map_or / doc list indentation の 4 警告を解消)
+- 回帰テスト 4 件追加 (streaming saturating, history drain panic, multibyte
+  display, attestation nonce 識別性) — 計 178 テスト
+- README / ステータスの数値を実測へ同期 (main.rs 行数、テスト数)
+
 ## [0.2.0] - 2026-04-18
 
 ### Added
