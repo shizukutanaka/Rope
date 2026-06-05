@@ -13,9 +13,9 @@
 | 1 | 分散GPUコンピュート市場 / DePIN | ✅ 完了 |
 | 2 | 分散LLM推論 (swarm/pipeline) | ✅ 完了 |
 | 3 | 検証可能推論 / Proof-of-Execution | ✅ 完了 |
-| 4 | 機密計算 / GPU TEE | ⏳ 未 |
-| 5 | ecash / Chaumian 少額決済 | ⏳ 未 |
-| 6 | P2P発見 / NAT越え / オーバーレイ | ⏳ 未 |
+| 4 | 機密計算 / GPU TEE | ✅ 完了 |
+| 5 | ecash / Chaumian 少額決済 | ✅ 完了 |
+| 6 | P2P発見 / NAT越え / オーバーレイ | ✅ 完了 |
 | 7 | セキュア握手 / 暗号ペアリング | ⏳ 未 |
 | 8 | Sybil耐性 / 評判 / インセンティブ | ⏳ 未 |
 | 9 | 推論サービング効率 | ⏳ 未 |
@@ -108,5 +108,90 @@
 
 ---
 
-<!-- LOOP-CONTINUE: 次イテレーションでカテゴリ 4〜10 を同形式で追記 -->
+## 4. 機密計算 / GPU TEE
+
+**スコープ**: 処理中データを GPU 内で暗号化し、貸し手にもプロンプトを見せない。`confidential.rs`。
+
+### 関連10件
+1. **NVIDIA nvtrust** — [github.com/NVIDIA/nvtrust](https://github.com/NVIDIA/nvtrust)（CC 補助OSS）
+2. **local_gpu_verifier** — [nvtrust/.../local_gpu_verifier](https://github.com/NVIDIA/nvtrust/blob/main/guest_tools/gpu_verifiers/local_gpu_verifier/README.md)（**SPDM 1.1 MEASUREMENT** を解析、署名検証、RIM golden 値と突合）
+3. **Attestation SDK (Python)** — [nvtrust/.../attestation_sdk](https://github.com/NVIDIA/nvtrust/tree/main/guest_tools/attestation_sdk)（attestation API、PyPI 配布）
+4. **ppcie-verifier** — [nvtrust/.../ppcie-verifier](https://github.com/NVIDIA/nvtrust/tree/main/guest_tools/ppcie-verifier)（マルチGPU/PCIe スイッチ構成）
+5. **NVIDIA Attestation docs** — [docs.nvidia.com/attestation](https://docs.nvidia.com/attestation/index.html)（**NRAS + RIM + OCSP**）
+6. **HCC Whitepaper** — [PDF](https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/HCC-Whitepaper-v1.0.pdf)（CVM=SEV-SNP/TDX 前提、Hopper+ 限定）
+7. **GPU CC Demystified** — [arXiv:2507.02770](https://arxiv.org/html/2507.02770v1)（初の詳細セキュリティ解析）
+8. **H100 CC 性能ベンチ** — [arXiv:2409.03992](https://arxiv.org/pdf/2409.03992v2)（CPU-GPU 転送=PCIe 暗号がボトルネック）
+9. **First Confidential GPUs** — [ACM Queue](https://queue.acm.org/detail.cfm?id=3623391)
+10. **Intel Trust Authority GPU attestation** — [docs](https://docs.trustauthority.intel.com/main/articles/articles/ita/concept-gpu-attestation.html)（マルチベンダ検証の前例）
+
+### Rope への改善点
+- **D1. 実検証フロー（既出 #3）**: `nvtrust/local_gpu_verifier` を範に、SPDM レポート→
+  署名検証→RIM golden 突合→OCSP 失効確認→nonce 鮮度、を `net/` に実装。**全パス時のみ**
+  `confidential` セッションを `Established` に。
+- **D2. 消費者GPUギャップ（既出 #2、最重要）**: CC は Hopper+ 限定。"アイドルGPU" 主供給の
+  RTX 等は非対応。`Privacy::Confidential` は **attested TEE ピア限定ルーティング**にし、
+  非TEEピアへ機微プロンプトを送らない。
+- **D3. 性能オーバーヘッドの明示**: H100 CC は CPU-GPU 転送が PCIe 暗号で律速。小ジョブ/
+  小バッチで相対オーバーヘッド大。intent の latency 見積りに CC ペナルティを反映。
+- **D4. nvtrust は Python**: Rope は Rust。FFI かサブプロセス委譲か、Rust で SPDM/RIM 検証を
+  再実装かを設計判断（最小依存主義との整合）。
+
+---
+
+## 5. ecash / Chaumian 少額決済
+
+**スコープ**: チャネル不要・匿名・オフライン検証可能な bearer トークンで秒単位課金。`ecash.rs`。
+
+### 関連10件
+1. **Cashu CDK** — [github.com/cashubtc/cdk](https://github.com/cashubtc/cdk)（Rust の wallet/mint 実装、**そのまま参照可**）
+2. **cashu crate** — [crates.io/crates/cashu](https://crates.io/crates/cashu)（CDK のコア型）
+3. **awesome-cashu** — [github.com/cashubtc/awesome-cashu](https://github.com/cashubtc/awesome-cashu)（実装カタログ）
+4. **NUT-11 P2PK** — [cashubtc.github.io/nuts/11](https://cashubtc.github.io/nuts/11/)（公開鍵ロック＋Schnorr 解錠＝escrow 裏付け）
+5. **NUT-12 DLEQ** — [cashubtc.github.io/nuts/12](https://cashubtc.github.io/nuts/12/)（mint 秘密鍵なしのオフライン検証）
+6. **cashu-zk-engine (BDHKE)** — [github.com/AbdelStark/cashu-zk-engine](https://github.com/AbdelStark/cashu-zk-engine)（Blind DH 鍵交換実装例）
+7. **Chaumian Mint proof-of-reserves** — [arXiv:2306.12783](https://arxiv.org/pdf/2306.12783)（準備金証明＋二重使用防止）
+8. **Cashu Nutshell** — [nobsbitcoin v0.14](https://www.nobsbitcoin.com/cashu-nutshell-v0-14-0/)（P2PK/DLEQ 参照実装の挙動）
+9. **NUT-07 checkstate** — proof 二重使用検証（`net/cashu_mint.rs` で既実装の HTTP）
+10. **Production blind-signature ecash in Rust** — [DEV](https://dev.to/chronocoders/building-a-production-ready-blind-signature-ecash-system-in-rust-4kdf)
+
+### Rope への改善点
+- **E1. BDHKE 実装（既出 #4）**: secp256k1 ブラインド署名で Proof を実体化。**CDK を依存に
+  取り込む**のが最短（自前実装より監査済みで安全）。最小依存主義とトレードオフを記録。
+- **E2. DLEQ(NUT-12) オフライン検証**: ストリーミング秒課金で mint 往復を省く鍵。受領時に
+  偽造拒否でき streaming の現実性が出る。
+- **E3. P2PK(NUT-11) で escrow ロック**: 3-way escrow をジョブ公開鍵に暗号的に束縛。
+- **E4. nullifier を `HashSet` 化（既出、即時）**: `Vec<String>` O(n)→O(1)。
+- **E5. 準備金/二重使用**: mint federation（型は既存）＋ NUT-07 checkstate を結線、
+  proof-of-reserves 表示で mint 信頼最小化。
+
+---
+
+## 6. P2P発見 / NAT越え / オーバーレイ
+
+**スコープ**: 別NAT背後の「他人のGPU」を発見し直接接続する。`pair.rs` の Mdns/Bluetooth/Dht。
+
+### 関連10件
+1. **rust-libp2p** — [github.com/libp2p/rust-libp2p](https://github.com/libp2p/rust-libp2p)（DHT+NAT越えの Rust デファクト）
+2. **DCUtR (hole punching)** — [libp2p tutorial](https://docs.rs/libp2p/latest/libp2p/tutorials/hole_punching/index.html)（Connect/Sync で同時 dial）
+3. **hole-punching spec** — [libp2p/specs](https://github.com/libp2p/specs/blob/master/connections/hole-punching.md)
+4. **AutoNAT** — 自ノードが公開到達可能か判定し hole punch 要否を決める
+5. **Circuit Relay v2** — TURN 相当の中継（endpoint-dependent NAT 向け）
+6. **mdns-sd** — [github.com/keepsimple1/mdns-sd](https://github.com/keepsimple1/mdns-sd)（safe Rust、Avahi/dns-sd 互換、`_rope._tcp.local` 実装に最適）
+7. **libmdns** — [github.com/librespot-org/libmdns](https://github.com/librespot-org/libmdns)（responder 専用）
+8. **btleplug** — [github.com/deviceplug/btleplug](https://github.com/deviceplug/btleplug)（近接 BLE 発見、Win/mac/Linux）
+9. **hivemind DHT** — [github.com/learning-at-home/hivemind](https://github.com/learning-at-home/hivemind)（Petals の広域発見実証）
+10. **libp2p hole punching 解説** — [IPFS Blog](https://blog.ipfs.tech/2022-01-20-libp2p-hole-punching/)
+
+### Rope への改善点
+- **F1. NAT越えの実装（既出 #5、致命）**: 現状モデルのみ。**libp2p DCUtR + AutoNAT +
+  Circuit Relay v2** を採用しないと「他人GPUを60秒で」はLANデモ止まり。
+- **F2. mDNS 実結線**: `mdns-sd` で `_rope._tcp.local` を実装、LAN即時発見を確定（設計コメント済）。
+- **F3. BLE 近接発見**: `btleplug` で `DiscoveryMethod::Bluetooth` を実体化（host/central のみ点に注意）。
+- **F4. DHT 広域**: libp2p Kademlia（または hivemind 流）で LAN外ピア発見。
+- **F5. フォールバック順序**: endpoint-independent NAT は DCUtR、依存NATは Relay。
+  両者併用で全到達ケースを被覆（spec の指針）。`pair` の発見モードに段階化。
+
+---
+
+<!-- LOOP-CONTINUE: 次イテレーションでカテゴリ 7〜10 を同形式で追記 -->
 </content>
