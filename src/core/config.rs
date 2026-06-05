@@ -183,8 +183,32 @@ impl LockGuard {
             Some(p) => p,
             None => return true, // PID 読めない = 壊れたロック = stale
         };
-        // /proc/<pid> 存在チェック (Linux)。無ければプロセス死亡とみなす。
+        Self::is_process_dead(pid, path)
+    }
+
+    /// PID が死亡しているか。`/proc` がある Linux では PID を直接確認する。
+    #[cfg(target_os = "linux")]
+    fn is_process_dead(pid: u32, _path: &std::path::Path) -> bool {
+        // /proc/<pid> 存在チェック。無ければプロセス死亡とみなす。
         !std::path::Path::new(&format!("/proc/{}", pid)).exists()
+    }
+
+    /// 非 Linux (macOS / Windows 等) には `/proc` が無く PID 死活を移植性高く
+    /// 確認できない。生存プロセスは Drop でロックを消すため、十分古いロック
+    /// ファイルは異常終了の残骸とみなす保守的フォールバックを使う。
+    ///
+    /// これにより、旧実装が非 Linux で「常に stale」と誤判定して相互排他を
+    /// 壊していた問題を防ぐ (生存ロックを奪わない)。
+    #[cfg(not(target_os = "linux"))]
+    fn is_process_dead(_pid: u32, path: &std::path::Path) -> bool {
+        const STALE_AFTER_SECS: u64 = 120;
+        match fs::metadata(path).and_then(|m| m.modified()) {
+            Ok(mtime) => mtime
+                .elapsed()
+                .map(|age| age.as_secs() >= STALE_AFTER_SECS)
+                .unwrap_or(false),
+            Err(_) => true, // メタデータ読めない = 壊れている = stale
+        }
     }
 }
 

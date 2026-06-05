@@ -15,6 +15,7 @@
 //! - 中断耐性: deadman_at で自動返金 (spot ジョブの突然終了)
 //! - 価格保証: amount_sats 固定 (オークション不要、bearer 性質で十分)
 //! - 信頼最小化: mint federation + 3-way escrow (中央決済所不要)
+//!
 //! 本モジュールが ROPE_2028 「核 30」のスポット概念を吸収する。
 //!
 //! ## 設計
@@ -853,9 +854,11 @@ impl EcashManager {
             return Ok(0);
         }
 
+        // クロックスキューや長時間放置 (大きな elapsed) でも panic させない。
+        // saturating で頭打ちにし、remaining で上限を切る (同モジュール 487/643 と一貫)。
         let elapsed_sec = (now - s.last_tick_at).num_seconds().max(0) as u64;
-        let delta = elapsed_sec * s.rate_sats_per_second;
-        let remaining = s.total_locked_sats - s.drained_sats;
+        let delta = elapsed_sec.saturating_mul(s.rate_sats_per_second);
+        let remaining = s.total_locked_sats.saturating_sub(s.drained_sats);
         let to_drain = delta.min(remaining);
 
         s.drained_sats += to_drain;
@@ -882,7 +885,7 @@ impl EcashManager {
             .context("stream 無し")?;
 
         s.state = StreamState::Closed;
-        let refund = s.total_locked_sats - s.drained_sats;
+        let refund = s.total_locked_sats.saturating_sub(s.drained_sats);
 
         // 未使用分を wallet に返す
         self.wallet.total_sats += refund;
@@ -1238,6 +1241,29 @@ mod tests {
 
         let drained = m.tick_stream(&s.id).unwrap();
         assert_eq!(drained, 30); // 10 sat/sec * 3 sec
+    }
+
+    #[test]
+    fn test_stream_tick_saturates_on_huge_elapsed() {
+        // クロックスキュー/長時間放置で elapsed*rate が u64 をオーバーフロー
+        // しても panic せず、remaining で頭打ちになる (saturating)。
+        // 旧実装は素の `*` で debug ビルドが panic していた。
+        let mut m = EcashManager::default();
+        m.add_mint(test_mint("mint1")).unwrap();
+        m.trust_mint("mint1", MintTrust::Trusted).unwrap();
+        m.mint_tokens("mint1", 1000).unwrap();
+
+        let s = m
+            .open_stream("job1", "pk-a", "pk-b", "mint1", 100, u64::MAX)
+            .unwrap();
+        m.streams
+            .iter_mut()
+            .find(|x| x.id == s.id)
+            .unwrap()
+            .last_tick_at = Utc::now() - chrono::Duration::seconds(86_400);
+
+        let drained = m.tick_stream(&s.id).unwrap();
+        assert_eq!(drained, 100); // total_locked_sats で頭打ち、オーバーフローなし
     }
 
     #[test]

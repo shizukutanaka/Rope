@@ -35,3 +35,11 @@ pub mod first_run;
 pub mod intent;
 pub mod pair;
 pub mod session;
+
+/// 表示用に文字列を先頭 `n` 文字へ安全に切り詰める (UTF-8 境界を割らない)。
+///
+/// `&s[..n]` のバイトスライスはマルチバイト境界に当たると panic する。
+/// ID は通常 ASCII だが、ピア名等に任意文字列が入りうるため共通化して防御する。
+pub(crate) fn short(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}

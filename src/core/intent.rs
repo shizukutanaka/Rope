@@ -89,7 +89,7 @@ impl Intent {
     pub fn with_latency_ms(mut self, target_ms: u32, tolerance: LatencyTolerance) -> Self {
         self.latency = Some(LatencyTarget {
             p50_ms: target_ms,
-            p99_ms: target_ms * 4,
+            p99_ms: target_ms.saturating_mul(4),
             tolerance,
         });
         self
@@ -175,7 +175,7 @@ impl Workload {
                 avg_tokens_per_item,
                 ..
             } => {
-                let total = num_items * (*avg_tokens_per_item as u64);
+                let total = num_items.saturating_mul(*avg_tokens_per_item as u64);
                 if total < 1_000_000 {
                     ComplexityClass::Medium
                 } else {
@@ -435,10 +435,10 @@ impl std::fmt::Display for ProviderChoice {
         match self {
             ProviderChoice::LocalDevice { .. } => write!(f, "ローカル"),
             ProviderChoice::FederatedPeer { peer_id, .. } => {
-                write!(f, "ピア ({})", &peer_id[..8.min(peer_id.len())])
+                write!(f, "ピア ({})", super::short(peer_id, 8))
             }
             ProviderChoice::SpotMarket { provider_id, .. } => {
-                write!(f, "スポット ({})", &provider_id[..8.min(provider_id.len())])
+                write!(f, "スポット ({})", super::short(provider_id, 8))
             }
             ProviderChoice::Hyperscaler { provider } => write!(f, "クラウド ({})", provider),
         }
@@ -851,7 +851,7 @@ impl IntentManager {
         }
 
         // 低レイテンシ要求 → speculative decoding
-        if intent.latency.as_ref().map_or(false, |l| l.p50_ms < 150) {
+        if intent.latency.as_ref().is_some_and(|l| l.p50_ms < 150) {
             order += 1;
             steps.push(PlanStep {
                 order,
@@ -953,7 +953,8 @@ impl IntentManager {
         let intent = self.intents.remove(idx);
         self.history.push(intent);
         if self.history.len() > self.config.max_history {
-            self.history.drain(..100);
+            let drop = self.history.len() - self.config.max_history;
+            self.history.drain(0..drop);
         }
         self.updated_at = Utc::now();
         Ok(())
@@ -1013,6 +1014,40 @@ pub fn format_plan(plan: &ExecutionPlan) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_history_drain_does_not_panic_on_small_max_history() {
+        // 旧実装は `drain(..100)` のため max_history < 100 で len が範囲外と
+        // なり panic していた。修正後は上限超過分のみ drain する。
+        let mut m = IntentManager::default();
+        m.config.max_history = 2;
+        for i in 0..5 {
+            let id = m
+                .submit(Intent::new(
+                    Workload::Inference {
+                        model: format!("m{i}"),
+                        prompt_tokens_est: 10,
+                        max_output_tokens: 10,
+                    },
+                    "user",
+                ))
+                .unwrap();
+            m.complete(&id).unwrap();
+        }
+        assert!(m.history.len() <= m.config.max_history);
+    }
+
+    #[test]
+    fn test_provider_display_handles_multibyte_id() {
+        // 旧実装は `&peer_id[..8]` のバイトスライスがマルチバイト境界に
+        // 当たると panic した。char ベースの super::short で防御する。
+        let p = ProviderChoice::FederatedPeer {
+            peer_id: "日本語ピアID１２３".to_string(),
+            trust_score: 0.9,
+        };
+        let s = format!("{p}"); // panic しないこと
+        assert!(s.contains("ピア"));
+    }
 
     fn sample_inference() -> Intent {
         Intent::new(

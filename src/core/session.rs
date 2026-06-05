@@ -423,11 +423,11 @@ pub fn format_session(s: &Session) -> String {
     let mut out = String::new();
     out.push_str("セッション:\n");
     out.push_str("═══════════════════════════════════════════════════\n");
-    out.push_str(&format!("  ID:        {}\n", &s.id[..8.min(s.id.len())]));
+    out.push_str(&format!("  ID:        {}\n", super::short(&s.id, 8)));
     out.push_str(&format!("  状態:      {}\n", s.state));
 
     if let Some(peer) = &s.peer_id {
-        out.push_str(&format!("  ピア:      {}\n", &peer[..16.min(peer.len())]));
+        out.push_str(&format!("  ピア:      {}\n", super::short(peer, 16)));
     }
     if let Some(t) = s.started_at {
         out.push_str(&format!(
@@ -439,7 +439,7 @@ pub fn format_session(s: &Session) -> String {
         out.push_str(&format!("  確認コード: {}\n", code));
     }
     if let Some(c_id) = &s.container_id {
-        out.push_str(&format!("  コンテナ:  {}\n", &c_id[..12.min(c_id.len())]));
+        out.push_str(&format!("  コンテナ:  {}\n", super::short(c_id, 12)));
     }
     if let Some(pid) = s.monitor_pid {
         out.push_str(&format!("  監視 PID:  {}\n", pid));
@@ -491,7 +491,7 @@ pub fn format_session_list(sessions: &[Session]) -> String {
     let mut out = format!("セッション一覧 ({}):\n", sessions.len());
     out.push_str("═══════════════════════════════════════════════════\n");
     for s in sessions {
-        out.push_str(&format!("  {}  {}", &s.id[..8.min(s.id.len())], s.state));
+        out.push_str(&format!("  {}  {}", super::short(&s.id, 8), s.state));
         if let Some(code) = &s.verify_code {
             out.push_str(&format!("  code={}", code));
         }
