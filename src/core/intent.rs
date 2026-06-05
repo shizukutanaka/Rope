@@ -899,6 +899,18 @@ impl IntentManager {
         cost: f64,
         latency: u32,
     ) -> (bool, Option<String>) {
+        // 安全不変条件 (#2×#3): TEE 機密計算は attestation 検証なしには保証できない。
+        // 検証なしで「プロンプトは相手に見えない」と称するのは、TEE を自称するだけの
+        // ピアへ平文を送ることに等しく危険。最低 Attested を要求し、無ければ infeasible。
+        if intent.privacy.requires_tee() && intent.verification == VerificationLevel::None {
+            return (
+                false,
+                Some(
+                    "機密計算(TEE必須)には最低 Attested 検証が必要: 未検証 TEE への平文送信を防止"
+                        .to_string(),
+                ),
+            );
+        }
         if let Some(budget) = &intent.budget {
             if matches!(budget.enforcement, BudgetEnforcement::Hard) && cost > budget.max_usd {
                 return (
@@ -1193,6 +1205,35 @@ mod tests {
             plan.selected_provider,
             ProviderChoice::FederatedPeer { .. }
         ));
+    }
+
+    /// 安全不変条件 (#2×#3): ConfidentialCompute + 検証なし → infeasible。
+    /// 未検証の TEE 自称ピアへ平文を送らせないためのガード。
+    #[test]
+    fn test_confidential_without_attestation_is_infeasible() {
+        let mut m = IntentManager::default();
+        // default verification = None
+        let i = sample_inference().with_privacy(Privacy::ConfidentialCompute);
+        let id = m.submit(i).unwrap();
+        let plan = m.resolve(&id).unwrap();
+        assert!(!plan.feasible, "TEE 必須 + 検証なしは危険なので infeasible");
+        assert!(plan
+            .infeasibility_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Attested"));
+    }
+
+    /// ConfidentialCompute に Attested 検証を付ければ feasible に戻る。
+    #[test]
+    fn test_confidential_with_attestation_is_feasible() {
+        let mut m = IntentManager::default();
+        let i = sample_inference()
+            .with_privacy(Privacy::ConfidentialCompute)
+            .with_verification(VerificationLevel::Attested);
+        let id = m.submit(i).unwrap();
+        let plan = m.resolve(&id).unwrap();
+        assert!(plan.feasible, "TEE + Attested は安全なので feasible");
     }
 
     // ====== Round 23: extracted helper tests ======
