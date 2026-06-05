@@ -235,7 +235,110 @@ CC 非対応）。一方プライバシー保証は CC 前提。**この 2 つ�
 
 ---
 
-## 9. 優先度サマリ
+## 10. Sybil 耐性 / レピュテーション（高） — 第2巡
+
+### 現状
+`pair.rs` の `trust_store` は **TOFU（Trust On First Use）のみ**。一度繋いだ鍵は覚えるが、
+**初回のピア選択に信頼の根拠が無い**。攻撃者は安価に多数の偽 GPU アイデンティティを
+作れる（Sybil 攻撃）。「他人の GPU」を不特定多数から借りる以上、ここは中核リスク。
+
+### 同種ソフト / arXiv
+- **Bittensor** ([arXiv:2507.02951](https://arxiv.org/abs/2507.02951)) — 新規 miner 登録に
+  TAO 支払いを課し Sybil スパムを抑止。Yuma consensus で品質スコアに応じ報酬、
+  低品質はレピュテーション "slashing" で経済的に淘汰。
+- **FORTYTWO** ([arXiv:2510.24801](https://arxiv.org/pdf/2510.24801)) — **経済ステークに
+  依存しない compute-anchored Sybil 耐性**: 新規ノードに test call（能力証明）を課す
+  + peer-ranked consensus。Rope の "トークン不要" 思想と相性が良い。
+- **DSperse** — モデルスライス単位の検証可能推論で市場をスケール。
+
+### 改善案
+1. **#1 の検証機構を Sybil 耐性に転用**: 初回ピアに小さな既知回答のチャレンジ
+   （proof-of-capability、FORTYTWO 式）を投げ、TEE/トークン無しでも能力を確認。
+2. `trust_store` に **レピュテーションスコア**（成功/検証パス/切断率）を持たせ、
+   resolver のピア選択入力に。低評価は自動降格（slashing 相当）。
+3. escrow と連動: 検証失敗・途中切断はスコア減点 → 再選択で回避。
+
+**優先度: 高**（不特定多数から借りる製品の安全性の前提。#1 と基盤を共有）。
+
+---
+
+## 11. モデル配布 / コールドスタート（高） — 第2巡
+
+### 現状
+「60 秒 wow」はピアが**目的モデルを既に保持している**前提に見える。保持していなければ
+モデル重みのフェッチ（数 GB〜数十 GB）が支配的になり、60 秒が崩れる。`intent`/`first_run`
+にモデル配送・コールドスタート対策が無い。
+
+### 同種ソフト / arXiv
+- **HydraServe** ([arXiv:2502.15524](https://arxiv.org/pdf/2502.15524)) — サーバレス LLM の
+  コールドスタート最小化。リモートストレージからの重みフェッチがボトルネック。
+- **ParaServe** — pipeline parallelism で重みを複数サーバに分散しコールドスタート短縮。
+  「モデルロードを計算・通信とオーバーラップ」させる latency-aware スケジューリング。
+- **IPFS / content-addressed (CID)** — 重みを CID で immutable に参照・P2P 配信。
+  改ざん検出（ハッシュ一致）も同時に得られる。
+
+### 改善案
+1. **content-addressed 配布**: モデル重みを CID（blake3 はもう依存にある）で参照し、
+   近傍ピア/LAN から P2P 取得。ハッシュ一致で**重みの完全性も検証**（#1 と相乗）。
+2. **ロードと計算のオーバーラップ**: レイヤを取得しながら前段レイヤを実行
+   （ParaServe/pipeline）。`first_run` の 60 秒予算に組み込む。
+3. resolver で「モデル保持済みピア」を優先（cold-start ペナルティをコスト関数に加算）。
+
+**優先度: 高**（README の中核 "60 秒" 約束の実体化に直結）。
+
+---
+
+## 12. プロバイダ側 推論効率（中） — 第2巡
+
+### 現状
+`earn`（貸し出し側）に推論効率の最適化が無い。スループットが低いと貸し手の採算が
+合わず、「1 秒課金」の単価が成立しにくい（供給が痩せる）。
+
+### 同種ソフト / arXiv
+- **Survey "Taming the Titans"** ([arXiv:2504.19720](https://arxiv.org/pdf/2504.19720)) —
+  連続バッチ / KV キャッシュ / 投機デコードの効率化サーベイ。
+- **LMCache** ([arXiv:2510.09665](https://arxiv.org/html/2510.09665v2)) — KV キャッシュを
+  GPU 外に退避し **prefix を query 間で再利用**。
+- **連続バッチ (Orca)** — iteration-level scheduling で静的バッチの無駄を排除。
+- **投機デコード** (Nightjar [arXiv:2512.22420](https://arxiv.org/pdf/2512.22420),
+  QuantSpec [arXiv:2502.10424]) — 並列トークン生成で latency 削減。
+
+### 改善案
+1. `earn` 実装時に **連続バッチ + prefix KV 再利用** を前提化（複数借り手を 1 GPU で捌く）。
+2. 単一借り手・短ジョブが多い Rope の特性では **投機デコード**が latency に効く
+   （60 秒 haiku デモにも直接効く）。
+3. これらは外部推論エンジン（llama.cpp/vLLM 等）に委譲し、Rope は intent→実行の
+   翻訳に徹する（モジュール最小主義と整合）。
+
+**優先度: 中**（供給側経済性。実推論エンジン結線時にまとめて）。
+
+---
+
+## 13. エネルギー / カーボン対応（中〜低・既存フィールドの実装） — 第2巡
+
+### 現状
+`intent.rs` に `EnergyPreference`（既定: unconstrained）と `RegionConstraint` が **存在するが
+未使用の dead field**。宣言だけで resolver が利用していない。
+
+### 同種ソフト / arXiv
+- **FREESH** ([arXiv:2511.00807](https://arxiv.org/pdf/2511.00807)) — 地域別カーボン排出率
+  × LLM ワークロード × GPU エネルギー特性を統合した時空間協調スケジューリング
+  （**異種 GPU** 前提 = Rope と同条件）。
+- **SLIT** ([arXiv:2505.23554](https://arxiv.org/abs/2505.23554)) — TTFT/カーボン/水/電力コストの
+  協調最適化。
+- **EcoServe** (arXiv:2502.05043) — operational + embodied 排出を考慮。
+
+### 改善案
+1. `EnergyPreference` を resolver の実入力に: 低カーボン地域/再エネピアを選好
+   （`RegionConstraint` と統合、ピア発見時にメタデータ取得）。
+2. 少なくとも「未使用フィールドを消す or 配線する」の二択を明確化
+   （宣言だけの dead field は API の誇大表示）。
+
+**優先度: 中〜低**（差別化要素だが、まず #1〜#5 の土台が先。ただし dead field 整理は即時可）。
+
+---
+
+## 14. 優先度サマリ（全項目）
 
 | 優先 | 項目 | 一言 |
 |------|------|------|
@@ -244,14 +347,20 @@ CC 非対応）。一方プライバシー保証は CC 前提。**この 2 つ�
 | 高 | #3 アテステーション実検証 | NRAS/RIM/OCSP/SPDM フロー |
 | 高 | #4 Cashu 暗号 | BDHKE+DLEQ(NUT-12)+P2PK(NUT-11)、nullifier を Set 化 |
 | 高 | #5 P2P 実結線 | Noise(snow)+libp2p NAT越え(DCUtR) |
+| 高 | #10 Sybil耐性/評判 | proof-of-capability(FORTYTWO)+評判スコア。#1と基盤共有 |
+| 高 | #11 モデル配布/コールドスタート | content-addressed(CID)+ロード/計算オーバーラップ |
 | 中 | #6 異種性スケジューリング | 複数ピア pipeline（Parallax 2段） |
 | 中 | #7 永続化 | ecash 状態の WAL/crash recovery |
+| 中 | #12 プロバイダ側推論効率 | 連続バッチ+prefix KV+投機デコード（earn 採算） |
+| 中低 | #13 エネルギー/カーボン | EnergyPreference を配線 or 削除（dead field 整理） |
 | 低 | #8 経済設計 | 現状固定価格を支持 |
 
 ### すぐ着手できる小改善（low-hanging fruit）
 - `spent_nullifiers: Vec<String>` → `HashSet`（#4-1、数行）
 - 非 TEE ピアへの機微ジョブ送信を resolver で拒否（#2-1、型で表現）
 - README のプライバシー主張に TEE 前提の注記（#2-2、誇大表示是正）
+- `EnergyPreference`/`RegionConstraint` の dead field を配線 or 削除（#13-2）
+- モデル重みを CID 参照にしハッシュ一致で完全性検証（#11-1、blake3 は既存依存）
 
 ---
 
@@ -283,5 +392,22 @@ CC 非対応）。一方プライバシー保証は CC 前提。**この 2 つ�
 - NUT-11 P2PK — [cashubtc.github.io/nuts/11](https://cashubtc.github.io/nuts/11/)
 - NUT-12 DLEQ — [cashubtc.github.io/nuts/12](https://cashubtc.github.io/nuts/12/)
 - Chaumian Mint proof-of-reserves — [arXiv:2306.12783](https://arxiv.org/pdf/2306.12783)
+
+**Sybil 耐性 / インセンティブ（第2巡）**
+- Bittensor 批判的分析 — [arXiv:2507.02951](https://arxiv.org/abs/2507.02951)
+- FORTYTWO (compute-anchored Sybil 耐性 + peer-ranked consensus) — [arXiv:2510.24801](https://arxiv.org/pdf/2510.24801)
+
+**モデル配布 / コールドスタート（第2巡）**
+- HydraServe — [arXiv:2502.15524](https://arxiv.org/pdf/2502.15524)
+- Decentralized LLM over Edge (energy harvesting) — [arXiv:2408.15907](https://arxiv.org/abs/2408.15907)
+
+**推論効率（第2巡）**
+- Survey: Taming the Titans — [arXiv:2504.19720](https://arxiv.org/pdf/2504.19720)
+- LMCache (prefix KV 再利用) — [arXiv:2510.09665](https://arxiv.org/html/2510.09665v2)
+- Nightjar (adaptive 投機デコード) — [arXiv:2512.22420](https://arxiv.org/pdf/2512.22420)
+
+**エネルギー / カーボン（第2巡）**
+- FREESH (異種 GPU 省エネスケジューリング) — [arXiv:2511.00807](https://arxiv.org/pdf/2511.00807)
+- SLIT (carbon/water/energy 協調) — [arXiv:2505.23554](https://arxiv.org/abs/2505.23554)
 </content>
 </invoke>
