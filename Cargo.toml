@@ -1,0 +1,97 @@
+[package]
+name = "rope"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.75"  # async fn in trait (stabilized 1.75)
+authors = ["Rope Contributors"]
+description = "他人のアイドル GPU を、安全に、1 ドル未満で 60 秒借りる方法"
+license = "MIT"
+readme = "README.md"
+keywords = ["gpu", "p2p", "tee", "ecash", "lightning"]
+categories = ["command-line-utilities", "network-programming"]
+repository = "https://github.com/shizukutanaka/rope"
+homepage = "https://github.com/shizukutanaka/rope"
+
+[dependencies]
+# CLI
+clap = { version = ">=4, <4.5.21", features = ["derive"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# serde_yaml: REMOVED Round 23 — 全モジュール JSON 統一、依存 -1
+
+# Async runtime (HTTP feature 時のみ — cashu_mint の実接続用)
+tokio = { version = "1", features = ["rt"], optional = true }
+
+# Error handling
+anyhow = "1"
+
+# Cryptography
+ed25519-dalek = { version = ">=2, <2.2", features = ["rand_core"] }
+# x25519-dalek, aes-gcm: v0.3 の Noise protocol 実装時に復活予定
+blake3 = ">=1, <1.6"
+rand = "0.8"
+base64 = "0.22"
+
+# transitive 1.75 互換固定
+# blake3 → cpufeatures が最新版で edition2024 要求
+cpufeatures = { version = ">=0.2, <0.3", optional = false }
+
+# uuid v7 → getrandom が最新版で edition2024 要求
+getrandom = { version = ">=0.2, <0.3", optional = false }
+
+# UUID
+uuid = { version = ">=1, <1.12", features = ["v7", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Directories
+dirs = "5"
+
+# Hex encoding
+hex = "0.4"
+
+# transitive 依存の 1.75 互換固定 (edition2024 回避)
+# ed25519-dalek → ... → base64ct が最新版で edition2024 を要求するため上限を設定
+base64ct = { version = ">=1, <1.7", default-features = false }
+
+# HTTP client (Cashu mint 実接続 — v0.3 で結線、デフォルト無効)
+# rustls-tls で OpenSSL 依存回避、json feature で serde 統合
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+
+# Logging
+tracing = "0.1"
+# tracing-subscriber: REMOVED Round 28 — main.rs 再構築で使用箇所消失
+
+[features]
+# デフォルトは純粋ロジックのみ (core/ + net DTO + 翻訳層)。
+# 実 HTTP 接続は opt-in: cargo build --features http
+default = []
+http = ["dep:reqwest", "dep:tokio"]
+
+[dev-dependencies]
+# (none — tempfile は未使用のため Round 33 で削除)
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# Apple 的品質ゲート: 警告 = エラー
+# Xcode の -Werror, Go の golangci-lint strictmode 相当
+[lints.rust]
+# 未使用 import / 変数を放置しない
+unused_imports = "deny"
+dead_code = "warn"
+# unsafe は明示的に opt-in
+unsafe_code = "deny"
+
+[lints.clippy]
+# 不要な clone を警告
+redundant_clone = "warn"
+# 不要な to_string を警告  
+unnecessary_to_owned = "warn"
+# Result を捨てない
+let_underscore_must_use = "warn"

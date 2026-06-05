@@ -1,0 +1,21 @@
+# Rust
+/target/
+# Note: Cargo.lock は binary crate なので commit する (Rust 公式推奨)
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rope runtime data
+/data/
+*.bak
+
+# Legacy archive (352KB, development history only)
+docs/archive/LEGACY_main.rs.txt

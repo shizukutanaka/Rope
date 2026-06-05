@@ -1,0 +1,43 @@
+MIT License
+
+Copyright (c) 2026 Rope Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## 免責事項（追加）
+
+本ソフトウェアはGPUリソースの一時的な共有を支援するツールです。
+以下について、開発者は一切の責任を負いません：
+
+1. 本ソフトウェアを使用して実行されたコードの内容および結果
+2. GPUリソース共有に起因するいかなる損害
+3. データの損失、破損、漏洩
+4. 第三者との紛争
+5. 法令違反行為
+
+利用者は、以下の用途での使用を禁じられます：
+
+- 違法行為を目的とした計算処理
+- 他者の権利を侵害する目的での使用
+- マルウェアの開発・配布
+- 不正アクセスの試み
+
+本ソフトウェアの使用は、上記の条件に同意したものとみなされます。

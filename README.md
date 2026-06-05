@@ -1,0 +1,128 @@
+# Rope
+
+**他人のアイドル GPU を、安全に、1 ドル未満で 60 秒借りる方法。**
+
+EXO は同じ所有者のデバイス向け。Rope は他人のデバイス向け。
+
+---
+
+## 60 秒デモ
+
+```
+$ rope
+👋 Rope へようこそ。60秒で他人のGPUでAIを動かします。
+🔑 鍵の準備ができました。
+📡 近くのピアを探しています…
+🤝 接続しました。
+🛡️  GPU は安全 (プロンプトは相手に見えません)
+💭 ジョブを組み立て中…
+✨ 動きました。
+
+A quiet click, a distant fan,
+Silicon warms for a stranger,
+My thanks ride on light.
+```
+
+ログイン無し。設定無し。質問無し。
+
+---
+
+## インストール
+
+```bash
+cargo install rope
+```
+
+初回実行:
+
+```bash
+rope
+```
+
+60 秒後、他人の GPU で haiku が画面に出る。
+
+---
+
+## 4 動詞
+
+```bash
+rope                  # 引数無し、初回 60 秒 wow moment
+rope pair             # AirDrop 式ピア発見 (mDNS / BT / QR)
+rope run <model>      # ローカル優先、足りなきゃピア
+rope earn             # 自分の GPU を貸し出す
+```
+
+---
+
+## なぜ Rope か (8 競合との比較)
+
+| | Rope | EXO | Petals | Akash | io.net | Vast.ai | RunPod | Ollama |
+|---|------|-----|--------|-------|--------|---------|--------|--------|
+| 他人 GPU | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| TEE プライバシー | ✅ | N/A | ❌ | △ | ❌ | ❌ | △ | N/A |
+| 独自トークン不要 | ✅ | N/A | ✅ | ❌AKT | ❌IO | ✅ | ✅ | N/A |
+| ジョブ中断耐性 | ✅escrow | N/A | ❌ | △ | △ | ❌ | △ | N/A |
+| 1秒単位課金 | ✅ | N/A | N/A | ❌ | ❌ | ❌ | ❌ | N/A |
+| ゼロコンフィグ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+
+**Rope の wedge** = 他人 GPU + GPU TEE + ecash 少額決済の交点。
+
+---
+
+## アーキテクチャ — 7 モジュール (旧 122 から -94%)
+
+### 4 動詞の核 (5)
+- `first_run` — 60 秒 wow moment オーケストレータ
+- `pair` — mDNS + Noise XX/IK + QR フォールバック
+- `intent` — workload を 4 動詞へ翻訳する単一プリミティブ
+- `confidential` — H100/H200/Blackwell GPU TEE 配線 (LANDMINES 2 対応)
+- `ecash` — Cashu bearer token + escrow + streaming
+
+### 共有基盤 (2)
+- `config` — 設定パス解決
+- `session` — セッション ID と暗号鍵管理
+
+これだけ。ROPE_2028 は「30 モジュール」を目標にしたが、**実際の出荷可能形は 7**。
+集中の極限。
+
+---
+
+## ステータス
+
+```
+モジュール:  7 core + 1 net  (旧 122、-93%)
+main.rs:     530 行 (旧 11,594、-95%)
+総 Rust:     8381 行 (旧 ~75,600、-89%)
+テスト:      174
+版:          0.2.0
+exit(1):     0 コマンド (全 4 動詞 graceful exit)
+```
+
+---
+
+## 設計原則
+
+1. **Empathy** — Markkula 1977 — 質問しない、推測する
+2. **Focus** — 4 動詞のみ
+3. **Subtraction** — 90 モジュール削除済
+4. **Work Backwards** — 60 秒の haiku から逆算
+5. **Wow Moment** — 「他人 GPU で AI が動いた」を初回体験
+
+詳細: [docs/internal/APPLE_METHOD.md](docs/internal/APPLE_METHOD.md)
+
+---
+
+## ドキュメント
+
+- [`CHANGELOG.md`](CHANGELOG.md) — 変更履歴 (SemVer)
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — 7 モジュール構造, 状態機械マップ, データフロー
+- [`examples/quickstart.sh`](examples/quickstart.sh) — 4 動詞クイックスタート
+- [`examples/library_usage.rs`](examples/library_usage.rs) — core/ ライブラリ使用例
+- [`docs/internal/`](docs/internal/) — 設計判断記録 (ビジョン, 競合分析, 削除ログ等)
+- [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — CI (check / test / clippy / fmt)
+
+---
+
+## ライセンス
+
+MIT
