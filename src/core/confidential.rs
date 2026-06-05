@@ -511,10 +511,13 @@ impl ConfidentialManager {
 
         let success = errors.is_empty() && trust >= 50;
         let measurements = Self::build_measurements(tee_type, &inst_id, memory_encryption);
-        let signature = Self::build_evidence_signature(&inst_id, tee_type, success, trust);
+        // report id を先に確定し、署名 nonce に流用 (再 attestation で digest が変わる)。
+        let report_id = uuid::Uuid::now_v7().to_string();
+        let signature =
+            Self::build_evidence_signature(&inst_id, tee_type, success, trust, &report_id);
 
         let report = AttestationReport {
-            id: uuid::Uuid::now_v7().to_string(),
+            id: report_id,
             tee_instance_id: instance_id.to_string(),
             report_type: AttestationReportType::Remote,
             verification_result: VerificationResult {
@@ -661,10 +664,7 @@ impl ConfidentialManager {
                 pcr.insert(1, "rtmr1:pending".into());
             }
             TeeType::NvidiaGpuTee => {
-                pcr.insert(
-                    0,
-                    format!("gpu_evidence:{}", &inst_id[..8.min(inst_id.len())]),
-                );
+                pcr.insert(0, format!("gpu_evidence:{}", super::short(inst_id, 8)));
             }
             _ => {}
         }
@@ -677,16 +677,26 @@ impl ConfidentialManager {
         }
     }
 
-    /// 検証 5/5: Evidence signature 構築 (FNV-1a)
-    /// 証拠ダイジェスト (v0.2 placeholder)
+    /// 検証 5/5: Evidence digest 構築 (v0.2 placeholder)
     ///
-    /// ⚠️ これは暗号学的署名ではない。FNV は衝突耐性なし。
-    /// v0.3 で実 GPU attestation に結線する際、NVIDIA の attestation report に
-    /// 含まれる実署名 (ECDSA over device cert chain) に置換する。
-    /// プレフィックスを `unverified-digest:` にして本物の署名と取り違えないようにする。
-    fn build_evidence_signature(inst_id: &str, tee: TeeType, ok: bool, trust: u32) -> String {
-        let evidence = format!("{}|{}|{}|{}", inst_id, tee as u8, ok, trust);
-        format!("unverified-digest:{:016x}", fnv_hash(&evidence))
+    /// ⚠️ これは依然として暗号学的「署名」ではない。v0.3 で実 GPU attestation に
+    /// 結線する際、NVIDIA の attestation report に含まれる実署名 (ECDSA over
+    /// device cert chain) に置換する。プレフィックスを `unverified-digest:` に
+    /// して本物の署名と取り違えないようにする。
+    ///
+    /// v0.2 改善: FNV (衝突耐性なし) を blake3 (衝突耐性あり) に置換し、`nonce`
+    /// (attestation ごとに一意な report id) を含めて、同一インスタンスの再
+    /// attestation でも digest が変わるようにした (リプレイ識別性)。
+    fn build_evidence_signature(
+        inst_id: &str,
+        tee: TeeType,
+        ok: bool,
+        trust: u32,
+        nonce: &str,
+    ) -> String {
+        let evidence = format!("{}|{}|{}|{}|{}", inst_id, tee as u8, ok, trust, nonce);
+        let digest = blake3::hash(evidence.as_bytes());
+        format!("unverified-digest:{}", hex::encode(&digest.as_bytes()[..8]))
     }
 
     /// セキュアセッションを作成
@@ -829,17 +839,6 @@ impl ConfidentialManager {
 }
 
 // ストレージ関数
-/// FNV-1a 64-bit hash, evidence digest 用
-/// (本格的な暗号 hash は net/attestation.rs で blake3 を使う)
-fn fnv_hash(s: &str) -> u64 {
-    let mut h: u64 = 14695981039346656037;
-    for b in s.bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(1099511628211);
-    }
-    h
-}
-
 /// confidential 設定の永続化パスを返す
 pub fn confidential_path() -> std::path::PathBuf {
     crate::core::config::config_dir().join("confidential.json")
@@ -1197,16 +1196,17 @@ mod tests {
             .any(|w| w.contains("SGX")));
     }
 
-    /// 証拠ダイジェストは同入力で決定的、かつ「未検証」と明示される
+    /// 再 attestation では digest が変わり (リプレイ識別性)、かつ「未検証」と明示される
     #[test]
-    fn test_signature_is_deterministic_for_same_state() {
+    fn test_signature_varies_per_attestation_and_marks_unverified() {
         let mut m = ConfidentialManager::default();
         let inst =
             m.create_tee_instance("gpu-1", "H100", TeeType::NvidiaGpuTee, SecurityLevel::High);
         let r1 = m.perform_attestation(&inst.id).unwrap();
         let r2 = m.perform_attestation(&inst.id).unwrap();
-        // 同じインスタンス + 同じ trust_score → 同じ digest
-        assert_eq!(
+        // 同じインスタンスでも report ごとに nonce が異なるため digest は変わる。
+        // 旧実装は同一 digest を返し、古い attestation report を使い回せた。
+        assert_ne!(
             r1.signature.as_ref().unwrap(),
             r2.signature.as_ref().unwrap()
         );
@@ -1264,10 +1264,42 @@ mod tests {
 
     #[test]
     fn test_helper_signature_differs_on_trust() {
-        let s1 =
-            ConfidentialManager::build_evidence_signature("id", TeeType::NvidiaGpuTee, true, 85);
-        let s2 =
-            ConfidentialManager::build_evidence_signature("id", TeeType::NvidiaGpuTee, true, 60);
+        let s1 = ConfidentialManager::build_evidence_signature(
+            "id",
+            TeeType::NvidiaGpuTee,
+            true,
+            85,
+            "n",
+        );
+        let s2 = ConfidentialManager::build_evidence_signature(
+            "id",
+            TeeType::NvidiaGpuTee,
+            true,
+            60,
+            "n",
+        );
+        assert_ne!(s1, s2);
+        assert!(s1.starts_with("unverified-digest:"));
+    }
+
+    #[test]
+    fn test_helper_signature_differs_on_nonce() {
+        // 同一インスタンスの再 attestation でも nonce が異なれば digest が変わる
+        // (リプレイ識別性)。
+        let s1 = ConfidentialManager::build_evidence_signature(
+            "id",
+            TeeType::NvidiaGpuTee,
+            true,
+            85,
+            "a",
+        );
+        let s2 = ConfidentialManager::build_evidence_signature(
+            "id",
+            TeeType::NvidiaGpuTee,
+            true,
+            85,
+            "b",
+        );
         assert_ne!(s1, s2);
     }
 

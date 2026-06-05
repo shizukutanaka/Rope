@@ -340,7 +340,7 @@ impl PairingToken {
 const B32_ALPHA: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 fn base32_encode(data: &[u8]) -> String {
-    let mut out = String::with_capacity((data.len() * 8 + 4) / 5);
+    let mut out = String::with_capacity((data.len() * 8).div_ceil(5));
     let mut buf: u64 = 0;
     let mut bits: u8 = 0;
     for &b in data {
@@ -379,23 +379,20 @@ fn base32_decode(s: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-// --- 最小 FNV-based HMAC (本番は hmac-sha256 クレート推奨、ここは依存最小) ---
+// --- blake3 keyed-hash MAC ---
+//
+// 以前は FNV-1a を「HMAC」として使っていたが、FNV は非暗号学的 (衝突耐性なし)
+// で、攻撃者が payload を改竄しつつ同じタグを作れるため QR ペアリングの偽造を
+// 防げなかった。blake3::keyed_hash は正式な keyed MAC (PRF) であり、依存追加なし
+// (blake3 は既存の直接依存) で本物の完全性保証を得られる。
+//
+// keyed_hash は厳密に 32-byte 鍵を要求するので、任意長の共有 secret を
+// blake3::hash で 32-byte に正規化してから鍵に用いる。
 fn compute_hmac(payload: &PairingTokenPayload, secret: &[u8]) -> String {
     let json = serde_json::to_vec(payload).unwrap_or_default();
-    let mut h: u64 = 14695981039346656037;
-    for &b in secret {
-        h = h.wrapping_mul(1099511628211);
-        h ^= b as u64;
-    }
-    for &b in &json {
-        h = h.wrapping_mul(1099511628211);
-        h ^= b as u64;
-    }
-    for &b in secret {
-        h = h.wrapping_mul(1099511628211);
-        h ^= b as u64;
-    }
-    format!("{:016x}", h)
+    let key = blake3::hash(secret);
+    let tag = blake3::keyed_hash(key.as_bytes(), &json);
+    hex::encode(tag.as_bytes())
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
