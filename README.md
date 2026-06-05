@@ -67,6 +67,13 @@ rope earn             # 自分の GPU を貸し出す
 
 **Rope の wedge** = 他人 GPU + GPU TEE + ecash 少額決済の交点。
 
+> **TEE プライバシーの前提**: 「プロンプトは相手に見えません」が成立するのは
+> **attestation 検証済みの TEE 対応 GPU (NVIDIA Hopper/Blackwell 以降)** に限ります。
+> CC 非対応の消費者 GPU に機微ジョブを送ると平文が露出するため、
+> `Privacy::ConfidentialCompute` の intent は **Attested 検証を必須**とし、
+> 検証なし/非 TEE ピアへのルーティングは resolver が拒否します
+> (`core::intent` の feasibility ガード)。詳細: [`docs/RESEARCH_IMPROVEMENTS.md`](docs/RESEARCH_IMPROVEMENTS.md) #2。
+
 ---
 
 ## アーキテクチャ — 7 モジュール (旧 122 から -94%)

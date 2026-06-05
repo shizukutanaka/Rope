@@ -358,7 +358,7 @@ CC 非対応）。一方プライバシー保証は CC 前提。**この 2 つ�
 ### すぐ着手できる小改善（low-hanging fruit）
 - ✅ **実装済** `spent_nullifiers` を `VecDeque`+`HashSet` 化（#4-1/E4、二重使用検出 O(n)→O(1)）
 - ✅ **実装済** ConfidentialCompute + 検証なしを resolver で infeasible 化（#2-1×#3、未検証TEEへの平文送信を拒否）
-- README のプライバシー主張に TEE 前提の注記（#2-2、誇大表示是正）
+- ✅ **実装済** README のプライバシー主張に TEE/attestation 前提の注記（#2-2、誇大表示是正）
 - `EnergyPreference`/`RegionConstraint` の dead field を配線 or 削除（#13-2）
 - モデル重みを CID 参照にしハッシュ一致で完全性検証（#11-1、blake3 は既存依存）
 
