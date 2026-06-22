@@ -112,6 +112,12 @@ impl Intent {
         self.region = region;
         self
     }
+
+    /// エネルギー選好を設定
+    pub fn with_energy(mut self, energy: EnergyPreference) -> Self {
+        self.energy = energy;
+        self
+    }
 }
 
 /// What work is being requested.
@@ -318,6 +324,19 @@ pub enum EnergyPreference {
     MinimizeWatts,
 }
 
+impl EnergyPreference {
+    /// 何らかのエネルギー制約が指定されているか (= 既定の Unconstrained 以外)。
+    pub fn is_constrained(&self) -> bool {
+        !matches!(self, EnergyPreference::Unconstrained)
+    }
+
+    /// 消費 Wh の最小化を要求しているか。
+    /// プロバイダ選択を最小エネルギー側へ寄せる判断に使う。
+    pub fn minimizes_watts(&self) -> bool {
+        matches!(self, EnergyPreference::MinimizeWatts)
+    }
+}
+
 /// Region / regulatory constraint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -457,6 +476,7 @@ pub enum Optimization {
     MultiLora,           // lora.rs
     SpotPricing,         // spot.rs
     EdgeOffload,         // edge_grid.rs
+    EnergyAware,         // energy preference honored
 }
 
 impl std::fmt::Display for Optimization {
@@ -470,6 +490,7 @@ impl std::fmt::Display for Optimization {
             Optimization::MultiLora => write!(f, "マルチ LoRA"),
             Optimization::SpotPricing => write!(f, "スポット価格"),
             Optimization::EdgeOffload => write!(f, "エッジオフロード"),
+            Optimization::EnergyAware => write!(f, "省エネ配慮"),
         }
     }
 }
@@ -617,6 +638,9 @@ impl IntentManager {
         estimated_cost += provider_cost;
         estimated_ms += provider_ms;
         estimated_wh += Self::estimate_energy(&provider, &intent);
+        if intent.energy.is_constrained() {
+            optimizations.push(Optimization::EnergyAware);
+        }
 
         match &provider {
             ProviderChoice::LocalDevice { .. } => {
@@ -770,6 +794,26 @@ impl IntentManager {
         }
 
         let complexity = intent.workload.complexity_class();
+
+        // エネルギー選好: 消費 Wh 最小化が要求された場合、privacy 制約を満たす範囲で
+        // 最小エネルギーのプロバイダを優先する。estimate_energy の倍率順は
+        // LocalDevice 0.5 < FederatedPeer 0.8 < SpotMarket 1.0 < Hyperscaler 1.2。
+        // Small はローカル実行 (最小)、それ以外は単一ローカル GPU に載らない想定のため
+        // spot より低エネルギーな federated peer へ委譲する。
+        if intent.energy.minimizes_watts() {
+            return match complexity {
+                ComplexityClass::Small if !matches!(intent.privacy, Privacy::FederatedOnly) => {
+                    ProviderChoice::LocalDevice {
+                        device_id: "this-device".to_string(),
+                    }
+                }
+                _ => ProviderChoice::FederatedPeer {
+                    peer_id: "low-energy-peer".to_string(),
+                    trust_score: 0.9,
+                },
+            };
+        }
+
         match (intent.privacy, complexity) {
             (Privacy::OnDevicePreferred, ComplexityClass::Small) => ProviderChoice::LocalDevice {
                 device_id: "this-device".to_string(),
@@ -1234,6 +1278,58 @@ mod tests {
         let id = m.submit(i).unwrap();
         let plan = m.resolve(&id).unwrap();
         assert!(plan.feasible, "TEE + Attested は安全なので feasible");
+    }
+
+    /// EnergyPreference::MinimizeWatts は AnyCompute の小ジョブをローカルへ寄せ、
+    /// EnergyAware 最適化を記録する (#13-2 dead field 配線)。
+    #[test]
+    fn test_minimize_watts_prefers_local_for_small() {
+        let mut m = IntentManager::default();
+        // AnyCompute の小ジョブは通常 SpotMarket だが、省エネ指定でローカルへ。
+        let i = sample_inference()
+            .with_privacy(Privacy::AnyCompute)
+            .with_energy(EnergyPreference::MinimizeWatts);
+        let id = m.submit(i).unwrap();
+        let plan = m.resolve(&id).unwrap();
+        assert!(
+            matches!(plan.selected_provider, ProviderChoice::LocalDevice { .. }),
+            "省エネ指定の小ジョブは最小エネルギーのローカルへ"
+        );
+        assert!(plan.optimizations.contains(&Optimization::EnergyAware));
+    }
+
+    /// 省エネ指定でも大規模ジョブはローカルに載らないため、spot より低エネルギーな
+    /// federated peer へ委譲する。
+    #[test]
+    fn test_minimize_watts_delegates_large_to_peer_not_spot() {
+        let mut m = IntentManager::default();
+        let i = Intent::new(
+            Workload::Batch {
+                model: "llama".to_string(),
+                num_items: 10_000,
+                avg_tokens_per_item: 200,
+            },
+            "test",
+        )
+        .with_privacy(Privacy::AnyCompute)
+        .with_energy(EnergyPreference::MinimizeWatts);
+        let id = m.submit(i).unwrap();
+        let plan = m.resolve(&id).unwrap();
+        assert!(
+            matches!(plan.selected_provider, ProviderChoice::FederatedPeer { .. }),
+            "大規模 + 省エネは spot ではなく低エネルギー peer へ委譲"
+        );
+        assert!(plan.optimizations.contains(&Optimization::EnergyAware));
+    }
+
+    /// 既定 (Unconstrained) では EnergyAware を付けず、従来のプロバイダ選択を維持。
+    #[test]
+    fn test_unconstrained_energy_keeps_default_routing() {
+        let mut m = IntentManager::default();
+        let i = sample_inference().with_privacy(Privacy::AnyCompute); // energy = Unconstrained
+        let id = m.submit(i).unwrap();
+        let plan = m.resolve(&id).unwrap();
+        assert!(!plan.optimizations.contains(&Optimization::EnergyAware));
     }
 
     // ====== Round 23: extracted helper tests ======
