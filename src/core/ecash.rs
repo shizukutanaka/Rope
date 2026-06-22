@@ -702,7 +702,34 @@ impl EcashManager {
         Ok(())
     }
 
-    /// Bob が完遂、証拠提出 → 解放
+    /// completion_proof が completion_condition を満たすか判定する検証ゲート。
+    ///
+    /// - proof が空白のみ → 不満足 (証拠なしの解放を拒否)
+    /// - condition が "==" を含む → 右辺を期待コミットメントとみなし、
+    ///   `proof == expected` か `blake3_hex(proof) == expected` で満足
+    ///   (値そのものの提出 / プリイメージ提出の両対応)
+    /// - "==" を含まない自由形式 → proof が非空なら満足 (旧来互換)
+    fn proof_satisfies(condition: &str, proof: &str) -> bool {
+        if proof.trim().is_empty() {
+            return false;
+        }
+        if let Some(idx) = condition.rfind("==") {
+            let expected = condition[idx + 2..].trim();
+            if expected.is_empty() {
+                return false;
+            }
+            if proof == expected {
+                return true;
+            }
+            return hex::encode(blake3::hash(proof.as_bytes()).as_bytes()) == expected;
+        }
+        true
+    }
+
+    /// Bob が完遂証拠を提出して escrow を解放する。
+    ///
+    /// 検証ゲート (#1×#5): completion_proof が completion_condition を満たさなければ
+    /// 解放しない。手抜き/誤計算でも支払われる free-riding を防ぐ。
     pub fn release_escrow(&mut self, escrow_id: &str, completion_proof: &str) -> Result<()> {
         let e = self
             .escrows
@@ -711,6 +738,9 @@ impl EcashManager {
             .context("escrow 無し")?;
         if !matches!(e.state, EscrowState::Deposited | EscrowState::InProgress) {
             anyhow::bail!("解放不可状態: {}", e.state);
+        }
+        if !Self::proof_satisfies(&e.completion_condition, completion_proof) {
+            anyhow::bail!("完遂証拠が条件を満たさない: 解放拒否 (free-riding 防止)");
         }
         e.completion_proof = Some(completion_proof.to_string());
         e.state = EscrowState::Released;
@@ -1207,10 +1237,36 @@ mod tests {
         assert_eq!(e.state, EscrowState::Deposited);
 
         m.mark_escrow_in_progress(&e.id).unwrap();
-        m.release_escrow(&e.id, "attestation-xyz").unwrap();
+        // 誤った証拠では解放されない (検証ゲート: free-riding 防止)
+        assert!(m.release_escrow(&e.id, "attestation-xyz").is_err());
+        // 条件 (hash==deadbeef) を満たす証拠で解放
+        m.release_escrow(&e.id, "deadbeef").unwrap();
 
         assert_eq!(m.stats.total_escrows_released, 1);
         assert!(m.escrows.is_empty()); // archived
+    }
+
+    /// 検証ゲート proof_satisfies: 条件と証拠の整合を確認
+    #[test]
+    fn test_proof_satisfies_gate() {
+        // 空証拠は常に不可
+        assert!(!EcashManager::proof_satisfies("hash==deadbeef", ""));
+        assert!(!EcashManager::proof_satisfies("hash==deadbeef", "   "));
+        // 直接一致
+        assert!(EcashManager::proof_satisfies("hash==deadbeef", "deadbeef"));
+        // 不一致は拒否
+        assert!(!EcashManager::proof_satisfies("hash==deadbeef", "beef"));
+        // プリイメージ提出: blake3(proof) == expected
+        let pre = "secret-output";
+        let h = hex::encode(blake3::hash(pre.as_bytes()).as_bytes());
+        let cond = format!("output.hash=={}", h);
+        assert!(EcashManager::proof_satisfies(&cond, pre));
+        assert!(!EcashManager::proof_satisfies(&cond, "wrong-preimage"));
+        // "==" 無しの自由形式条件は非空証拠で満足 (旧来互換)
+        assert!(EcashManager::proof_satisfies("cond", "proof"));
+        assert!(!EcashManager::proof_satisfies("cond", ""));
+        // 右辺が空の条件は不可
+        assert!(!EcashManager::proof_satisfies("hash==", "anything"));
     }
 
     #[test]

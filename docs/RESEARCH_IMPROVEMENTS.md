@@ -342,7 +342,7 @@ CC 非対応）。一方プライバシー保証は CC 前提。**この 2 つ�
 
 | 優先 | 項目 | 一言 |
 |------|------|------|
-| 最高 | #1 検証機構 | VeriLLM(~1%)/TOPLOC を実装、escrow にゲート |
+| 最高 | #1 検証機構 | VeriLLM(~1%)/TOPLOC を実装、escrow にゲート ✅escrowゲート実装済(`proof_satisfies`)、本体は未 |
 | 最高 | #2 TEE/消費者GPUギャップ | 機微ジョブは TEE ピア限定ルーティング、誇大表示是正 |
 | 高 | #3 アテステーション実検証 | NRAS/RIM/OCSP/SPDM フロー |
 | 高 | #4 Cashu 暗号 | BDHKE+DLEQ(NUT-12)+P2PK(NUT-11)、nullifier を Set 化 |
