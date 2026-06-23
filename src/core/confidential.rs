@@ -637,8 +637,14 @@ impl ConfidentialManager {
     }
 
     /// 検証 3/5: 反復異常検出 (replay 攻撃の兆候)
+    ///
+    /// 問⑰: 旧実装は窓を 60 秒固定にしていたため、13 秒以上間隔を空けた slow-drip
+    /// 攻撃では閾値 (5 回) に引っかからず無限に replay できた。
+    /// 窓を `attestation_interval_seconds` に合わせることで、設定された更新周期全体を
+    /// 1 つの監視窓として扱い slow-drip 耐性を確保する。
     fn detect_replay_anomaly(&self, instance_id: &str) -> (Vec<String>, u32) {
-        let cutoff = Utc::now() - chrono::Duration::seconds(60);
+        let window = self.config.attestation_interval_seconds as i64;
+        let cutoff = Utc::now() - chrono::Duration::seconds(window);
         let recent = self
             .attestation_reports
             .iter()
@@ -646,8 +652,8 @@ impl ConfidentialManager {
             .count();
         if recent >= 5 {
             let msg = format!(
-                "1 分間に {} 回の反復 attestation — replay 攻撃の可能性",
-                recent
+                "{} 秒以内に {} 回の反復 attestation — replay 攻撃の可能性",
+                window, recent
             );
             (vec![msg], 75) // 75 = 100 - 25 penalty
         } else {
@@ -714,6 +720,22 @@ impl ConfidentialManager {
 
         if instance.attestation_status != AttestationStatus::Verified {
             anyhow::bail!("TEE instance not attested");
+        }
+        // 問⑯: Verified ステータスは refresh_expired_attestations() を呼ぶまで
+        // 古いまま残り、期限切れの attestation でセッションが作られる。
+        // 外部からの refresh 呼び出しに依存せず、鮮度を直接確認する。
+        let stale = instance
+            .last_attestation
+            .map(|last| {
+                (Utc::now() - last).num_seconds() > self.config.attestation_interval_seconds as i64
+            })
+            .unwrap_or(true); // last_attestation = None → 未 attest → stale
+        if stale {
+            anyhow::bail!(
+                "TEE attestation 期限切れ — perform_attestation を再実行してください \
+                 (interval: {}s)",
+                self.config.attestation_interval_seconds
+            );
         }
 
         let now = Utc::now();
@@ -972,6 +994,79 @@ mod tests {
             .create_secure_session(&instance.id, "user-001")
             .unwrap();
         assert_eq!(session.tee_instance_id, instance.id);
+    }
+
+    /// 問⑯: attestation は Verified でも last_attestation が期限切れなら
+    /// create_secure_session は Err を返す。
+    /// 旧実装は refresh_expired_attestations() を呼ぶまで
+    /// Verified のままセッション作成が通っていた。
+    #[test]
+    fn test_create_secure_session_rejects_stale_attestation() {
+        let mut m = ConfidentialManager::default();
+        let inst = m.create_tee_instance(
+            "gpu-1",
+            "H100",
+            TeeType::NvidiaGpuTee,
+            SecurityLevel::Standard,
+        );
+        m.perform_attestation(&inst.id).unwrap();
+
+        // 正常: 直後はセッション作成可能
+        assert!(m.create_secure_session(&inst.id, "u1").is_ok());
+
+        // last_attestation を interval + 1 秒前に巻き戻す
+        let interval = m.config.attestation_interval_seconds as i64;
+        m.tee_instances
+            .iter_mut()
+            .find(|i| i.id == inst.id)
+            .unwrap()
+            .last_attestation = Some(Utc::now() - chrono::Duration::seconds(interval + 1));
+
+        // status は Verified のまま — でも鮮度チェックで拒否されるべき
+        let stale_inst = m.tee_instances.iter().find(|i| i.id == inst.id).unwrap();
+        assert_eq!(stale_inst.attestation_status, AttestationStatus::Verified);
+
+        let result = m.create_secure_session(&inst.id, "u1");
+        assert!(
+            result.is_err(),
+            "期限切れ attestation でセッションを作成できてはならない"
+        );
+        assert!(result.unwrap_err().to_string().contains("期限切れ"));
+    }
+
+    /// 問⑰: detect_replay_anomaly の窓が attestation_interval に合わせて拡張される。
+    /// 小さいインターバル設定 (2s) で 5 回実行すると 2 秒窓で全件検出される。
+    #[test]
+    fn test_replay_anomaly_uses_configured_interval_window() {
+        let mut m = ConfidentialManager::default();
+        m.config.attestation_interval_seconds = 2; // 窓 = 2 秒 (テスト用に短縮)
+        let inst = m.create_tee_instance(
+            "gpu-1",
+            "H100",
+            TeeType::NvidiaGpuTee,
+            SecurityLevel::Maximum,
+        );
+        // 5 回 attestation — 全て 2 秒窓内
+        for _ in 0..5 {
+            m.perform_attestation(&inst.id).unwrap();
+        }
+        // 6 回目で閾値超過 → 反復警告
+        let r = m.perform_attestation(&inst.id).unwrap();
+        assert!(
+            r.verification_result
+                .warnings
+                .iter()
+                .any(|w| w.contains("反復")),
+            "閾値超過で反復 attestation 警告が出るべき"
+        );
+        // 警告メッセージに設定済み窓 (2s) が含まれる
+        assert!(
+            r.verification_result
+                .warnings
+                .iter()
+                .any(|w| w.contains("2 秒")),
+            "窓サイズがメッセージに反映されるべき"
+        );
     }
 
     #[test]
