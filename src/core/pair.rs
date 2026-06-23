@@ -393,6 +393,85 @@ impl CapabilityChallenge {
     }
 }
 
+// ============================================================================
+// チャレンジコーパス (ソクラテス問答①への応答)
+//
+// 問: 「expected_output_hash は誰が計算したのか？呼び出し元が正解を知っていれば
+//       検証は不要では？」
+// 答: 組み込みコーパスを用意し、Rope 開発者が確定論的に計算した参照値を提供する。
+//     コーパスのチャレンジは blake3_participation 形式 — ピアは task_spec を受け取り
+//     blake3(task_spec) を返すだけでよい。
+//     これは「alive かつ protocol に従える」ことを証明する liveness check。
+//     「実際に正しい推論ができるか」は escrow の proof_satisfies で検証する。
+// ============================================================================
+
+/// 組み込みベンチマークエントリ
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkEntry {
+    pub model: String,
+    pub task_spec: String,
+    pub expected_output_hash: String,
+    pub timeout_seconds: u32,
+}
+
+/// 組み込みチャレンジコーパス
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ChallengeCorpus {
+    pub entries: Vec<BenchmarkEntry>,
+}
+
+impl ChallengeCorpus {
+    /// Rope 組み込みコーパス
+    pub fn built_in() -> Self {
+        let models: &[(&str, u32)] = &[
+            ("llama-3.2-1b", 30),
+            ("llama-3.2-3b", 45),
+            ("phi-3.5-mini", 30),
+            ("gemma-2-2b", 30),
+            ("mistral-7b", 60),
+        ];
+        let entries = models
+            .iter()
+            .map(|&(model, timeout)| {
+                let task_spec = format!("blake3_participation:rope:v1:{model}");
+                let hash = blake3::hash(task_spec.as_bytes());
+                BenchmarkEntry {
+                    model: model.to_string(),
+                    task_spec,
+                    expected_output_hash: hex::encode(hash.as_bytes()),
+                    timeout_seconds: timeout,
+                }
+            })
+            .collect();
+        Self { entries }
+    }
+
+    /// モデル名でエントリ検索
+    pub fn for_model(&self, model: &str) -> Option<&BenchmarkEntry> {
+        self.entries.iter().find(|e| e.model == model)
+    }
+
+    /// ピアの申告モデルに対するチャレンジ spec / hash を返す
+    pub fn challenge_for_peer(
+        &self,
+        peer_capabilities: &PeerCapabilities,
+    ) -> Option<(&str, &str, u32)> {
+        if !peer_capabilities.gpu_model.is_empty() {
+            if let Some(e) = self.for_model(&peer_capabilities.gpu_model) {
+                return Some((&e.task_spec, &e.expected_output_hash, e.timeout_seconds));
+            }
+        }
+        // 具体モデル不明ならデフォルトの汎用チャレンジ (最軽量)
+        self.entries.first().map(|e| {
+            (
+                e.task_spec.as_str(),
+                e.expected_output_hash.as_str(),
+                e.timeout_seconds,
+            )
+        })
+    }
+}
+
 // --- base32 (Crockford, QR 互換、混同文字無し) ---
 const B32_ALPHA: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -921,6 +1000,47 @@ impl PairManager {
             .unwrap_or(false)
     }
 
+    // ======================================================================
+    // 問③への応答: 証明期限切れ
+    // 「capability_proven: bool に期限がない — 昨日外した GPU が今日も proven のまま」
+    // → max_age_seconds 以内に challenged_at があり且つ proven == true のみ有効とする
+    // ======================================================================
+
+    /// 能力証明が max_age_seconds 以内に取得されていれば新鮮 (true)
+    pub fn is_capability_fresh(&self, pubkey: &str, max_age_seconds: i64) -> bool {
+        self.trust_store
+            .get(pubkey)
+            .map(|identity| match identity.challenged_at {
+                Some(t) => {
+                    identity.capability_proven && (Utc::now() - t).num_seconds() < max_age_seconds
+                }
+                None => false,
+            })
+            .unwrap_or(false)
+    }
+
+    // ======================================================================
+    // 問②への応答: 実ジョブ結果を評判に反映
+    // 「チャレンジ成功 ≠ ジョブ品質。escrow 解放後の結果が評判に戻らない」
+    // → resolver が呼び出し、3 回成功で Unknown→Familiar に昇格
+    // ======================================================================
+
+    /// 実ジョブ完了結果を信頼ストアに記録
+    pub fn record_job_outcome(&mut self, pubkey: &str, success: bool) {
+        if let Some(identity) = self.trust_store.get_mut(pubkey) {
+            if success {
+                identity.successful_jobs = identity.successful_jobs.saturating_add(1);
+                // 3 回以上成功した Unknown ピアを Familiar へ昇格
+                if identity.successful_jobs >= 3 && identity.trust_level == TrustLevel::Unknown {
+                    identity.trust_level = TrustLevel::Familiar;
+                }
+            } else {
+                identity.failed_jobs = identity.failed_jobs.saturating_add(1);
+            }
+        }
+        self.updated_at = Utc::now();
+    }
+
     /// 古い発見エントリを掃除 (デフォルト: 60秒以上見てない)
     pub fn prune_stale_discoveries(&mut self, stale_seconds: i64) {
         let cutoff = Utc::now() - chrono::Duration::seconds(stale_seconds);
@@ -929,6 +1049,9 @@ impl PairManager {
     }
 
     /// 能力でピア推薦 (rope run が使う)
+    ///
+    /// ソクラテス問答②の帰結: 評判スコアを信頼度と組み合わせて選別する。
+    /// 信頼度 (TrustLevel) を第一キー、評判スコアを第二キーとして降順ソート。
     pub fn recommend_for_job(&self, min_vram_gb: u32, needs_payment: bool) -> Vec<&PairedPeer> {
         let mut candidates: Vec<&PairedPeer> = self
             .paired
@@ -938,10 +1061,16 @@ impl PairManager {
             .filter(|p| !needs_payment || p.capabilities.accepts_payment)
             .collect();
 
-        // 信頼度 → 最新活動で並び替え
+        // 信頼度 → 評判スコア → 最新活動で並び替え
         candidates.sort_by(|a, b| {
-            b.trust_level
-                .cmp(&a.trust_level)
+            let trust_ord = b.trust_level.cmp(&a.trust_level);
+            if trust_ord != std::cmp::Ordering::Equal {
+                return trust_ord;
+            }
+            let ra = self.reputation_score(&a.verified_pubkey).unwrap_or(0.5_f64);
+            let rb = self.reputation_score(&b.verified_pubkey).unwrap_or(0.5_f64);
+            rb.partial_cmp(&ra)
+                .unwrap_or(std::cmp::Ordering::Equal)
                 .then(b.last_active.cmp(&a.last_active))
         });
         candidates
@@ -1789,5 +1918,200 @@ mod tests {
             },
         );
         assert!(m.is_capability_proven_or_trusted("pk-trusted"));
+    }
+
+    // ======================================================================
+    // ソクラテス問答①: コーパスが oracle 問題を解決するか
+    // ======================================================================
+
+    #[test]
+    fn test_challenge_corpus_built_in_is_self_consistent() {
+        let corpus = ChallengeCorpus::built_in();
+        assert!(!corpus.entries.is_empty(), "組み込みコーパスが空");
+
+        for entry in &corpus.entries {
+            // expected_output_hash が task_spec の blake3 であることを検証
+            let hash = blake3::hash(entry.task_spec.as_bytes());
+            let expected = hex::encode(hash.as_bytes());
+            assert_eq!(
+                entry.expected_output_hash, expected,
+                "コーパスエントリ '{}' のハッシュ不一致",
+                entry.model
+            );
+        }
+    }
+
+    #[test]
+    fn test_corpus_for_model_returns_correct_entry() {
+        let corpus = ChallengeCorpus::built_in();
+        let entry = corpus
+            .for_model("llama-3.2-1b")
+            .expect("llama-3.2-1b must exist");
+        assert!(entry.task_spec.contains("llama-3.2-1b"));
+    }
+
+    #[test]
+    fn test_corpus_challenge_for_peer_falls_back_to_default() {
+        let corpus = ChallengeCorpus::built_in();
+        let caps = PeerCapabilities {
+            gpu_model: "unknown-model-xyz".to_string(),
+            ..Default::default()
+        };
+        // 未知モデルでもデフォルト (first entry) が返る
+        let result = corpus.challenge_for_peer(&caps);
+        assert!(
+            result.is_some(),
+            "未知モデルでデフォルトチャレンジが返るべき"
+        );
+    }
+
+    // ======================================================================
+    // ソクラテス問答②: 実ジョブ結果が評判に反映されるか
+    // ======================================================================
+
+    #[test]
+    fn test_record_job_outcome_updates_reputation() {
+        let mut m = PairManager::default();
+        let pk = "pk-job-outcome";
+        m.trust_store.insert(
+            pk.to_string(),
+            TrustedIdentity {
+                pubkey: pk.to_string(),
+                display_name: "Test".to_string(),
+                first_paired: Utc::now(),
+                last_paired: Utc::now(),
+                pair_count: 1,
+                trust_level: TrustLevel::Unknown,
+                note: None,
+                capability_proven: false,
+                challenged_at: None,
+                successful_jobs: 0,
+                failed_jobs: 0,
+            },
+        );
+
+        m.record_job_outcome(pk, true);
+        m.record_job_outcome(pk, true);
+        m.record_job_outcome(pk, false);
+        assert_eq!(m.trust_store[pk].successful_jobs, 2);
+        assert_eq!(m.trust_store[pk].failed_jobs, 1);
+
+        // スコア: 2/3 ≈ 0.667
+        let score = m.reputation_score(pk).unwrap();
+        assert!((score - 2.0 / 3.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_record_job_outcome_promotes_to_familiar_at_3_successes() {
+        let mut m = PairManager::default();
+        let pk = "pk-promote";
+        m.trust_store.insert(
+            pk.to_string(),
+            TrustedIdentity {
+                pubkey: pk.to_string(),
+                display_name: "Promote".to_string(),
+                first_paired: Utc::now(),
+                last_paired: Utc::now(),
+                pair_count: 1,
+                trust_level: TrustLevel::Unknown,
+                note: None,
+                capability_proven: false,
+                challenged_at: None,
+                successful_jobs: 0,
+                failed_jobs: 0,
+            },
+        );
+
+        m.record_job_outcome(pk, true);
+        m.record_job_outcome(pk, true);
+        assert_eq!(
+            m.trust_store[pk].trust_level,
+            TrustLevel::Unknown,
+            "2 回はまだ Unknown"
+        );
+        m.record_job_outcome(pk, true);
+        assert_eq!(
+            m.trust_store[pk].trust_level,
+            TrustLevel::Familiar,
+            "3 回成功で Familiar に昇格"
+        );
+    }
+
+    // ======================================================================
+    // ソクラテス問答③: 証明期限切れ
+    // ======================================================================
+
+    #[test]
+    fn test_capability_fresh_within_ttl() {
+        let mut m = PairManager::default();
+        let pk = "pk-fresh";
+        m.trust_store.insert(
+            pk.to_string(),
+            TrustedIdentity {
+                pubkey: pk.to_string(),
+                display_name: "Fresh".to_string(),
+                first_paired: Utc::now(),
+                last_paired: Utc::now(),
+                pair_count: 1,
+                trust_level: TrustLevel::Unknown,
+                note: None,
+                capability_proven: true,
+                challenged_at: Some(Utc::now()),
+                successful_jobs: 1,
+                failed_jobs: 0,
+            },
+        );
+        assert!(m.is_capability_fresh(pk, 3600), "直近の証明は新鮮");
+    }
+
+    #[test]
+    fn test_capability_stale_after_ttl() {
+        let mut m = PairManager::default();
+        let pk = "pk-stale";
+        let old_time = Utc::now() - chrono::Duration::seconds(7200);
+        m.trust_store.insert(
+            pk.to_string(),
+            TrustedIdentity {
+                pubkey: pk.to_string(),
+                display_name: "Stale".to_string(),
+                first_paired: Utc::now(),
+                last_paired: Utc::now(),
+                pair_count: 1,
+                trust_level: TrustLevel::Unknown,
+                note: None,
+                capability_proven: true,
+                challenged_at: Some(old_time),
+                successful_jobs: 1,
+                failed_jobs: 0,
+            },
+        );
+        // TTL 3600 秒、証明は 7200 秒前 → stale
+        assert!(!m.is_capability_fresh(pk, 3600), "期限切れの証明は stale");
+    }
+
+    #[test]
+    fn test_capability_no_challenge_timestamp_is_not_fresh() {
+        let mut m = PairManager::default();
+        let pk = "pk-no-ts";
+        m.trust_store.insert(
+            pk.to_string(),
+            TrustedIdentity {
+                pubkey: pk.to_string(),
+                display_name: "NoTs".to_string(),
+                first_paired: Utc::now(),
+                last_paired: Utc::now(),
+                pair_count: 1,
+                trust_level: TrustLevel::Unknown,
+                note: None,
+                capability_proven: false,
+                challenged_at: None,
+                successful_jobs: 0,
+                failed_jobs: 0,
+            },
+        );
+        assert!(
+            !m.is_capability_fresh(pk, 3600),
+            "タイムスタンプ無しは fresh ではない"
+        );
     }
 }
