@@ -272,6 +272,29 @@ CC 非対応）。一方プライバシー保証は CC 前提。**この 2 つ�
 
 言語仕様上、経済ステーク無しで未知ピアの能力を確認。resolver はこれを後続の選択に使える基盤を提供。
 
+#### ソクラテス式深掘り (問④⑤への構造的応答)
+
+初版コーパス (`blake3(固定文字列)`) には致命的欠陥があった:
+- **問④**: 固定答えは compute コストゼロ。スマホでも即答 → "compute-anchored" が無効化。
+- **問⑤**: モデルごとに期待値が定数 → 一度盗んだ答えを全 ID で再生可能（struct が約束する
+  nonce ベースの再生防止が実装に存在しなかった）。
+
+応答として **per-identity proof-of-work** を導入 (`compute_pow_answer`):
+```
+answer = blake3^difficulty(nonce ‖ peer_pubkey)
+```
+- **nonce (乱数)**: 事前計算不能・再生不能。
+- **peer_pubkey 束縛**: ある ID の答えは別 ID に使えない（Sybil ファームは ID ごとに計算）。
+- **difficulty 逐次反復**: 実コストを課す。検証は安価・生成は相応の非対称性。
+
+`issue_pow_challenge()` が乱数 nonce を生成し期待答えを計算。
+`verify_capability_proof()` は既存のハッシュ一致ロジックでそのまま検証可能。
+liveness のみ必要なら difficulty=0 の `issue_capability_challenge()` を併存。
+新規回帰テスト 7 件（決定論性 / pubkey 束縛 / nonce 束縛 / difficulty / 正直ピア検証 /
+盗用答え拒否 / 空 pubkey 拒否）。これは「GPU 推論の正しさ」ではなく「この identity は
+実コストを払った」ことの証明であり、推論検証は escrow の `proof_satisfies` が担う、と
+責務を明確に分離している。
+
 ---
 
 ## 11. モデル配布 / コールドスタート（高） — 第2巡

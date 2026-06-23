@@ -68,7 +68,13 @@ Familiar → [user explicit] → Trusted
 ```
 
 resolver はこれを後続で ピア選択の入力に利用可。トークン不要の Sybil 耐性確立。
-テスト 188/194、 clippy・fmt 全クリーン。
+
+**ソクラテス式深掘りでの修正 (問④⑤):** 初版コーパスの固定答えは compute コストゼロ・
+全 ID 共有可能で、"compute-anchored" の核心を満たしていなかった。per-identity proof-of-work
+`blake3^difficulty(nonce ‖ peer_pubkey)` を導入し、事前計算・ID 間共有・無コストの 3 つを同時に
+封じた。`issue_pow_challenge` / `compute_pow_answer` + 回帰テスト 7 件。
+
+テスト 203/209、 clippy・fmt 全クリーン。
 
 ## 次の一手 (推奨順)
 

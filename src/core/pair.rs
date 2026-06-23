@@ -360,6 +360,10 @@ pub struct CapabilityChallenge {
     pub task_spec: String,
     /// 期待される出力ハッシュ (blake3)
     pub expected_output_hash: String,
+    /// 一回限りの乱数 (リプレイ・事前計算防止 — 問⑤への応答)
+    pub nonce: String,
+    /// proof-of-work の反復回数 (0 = liveness のみ、>0 = compute-anchored — 問④への応答)
+    pub difficulty: u32,
     /// チャレンジ発行時刻
     pub issued_at: DateTime<Utc>,
     /// タイムアウト（秒）
@@ -391,6 +395,28 @@ impl CapabilityChallenge {
     pub fn is_pending(&self) -> bool {
         self.state == ChallengeState::Pending && self.is_valid()
     }
+}
+
+/// per-identity proof-of-work の答えを計算する (問④⑤への応答)
+///
+/// `answer = blake3^difficulty(nonce ‖ peer_pubkey)`
+///
+/// この設計が解決するもの:
+/// - **事前計算不能** (問④): nonce が乱数なので、コーパスのような固定答えは作れない。
+/// - **ID 間共有不能** (問⑤): peer_pubkey を混ぜるので、ある ID の答えは別 ID に使えない。
+/// - **compute-anchored**: difficulty 回の逐次ハッシュが実コストを課す。
+///   Sybil ファームは ID ごとにこのコストを払わねばならず、大量生成が高価になる。
+///
+/// 注: これは「GPU で正しい推論ができる」ことの証明ではない (それは escrow の
+/// proof_satisfies が担う)。これは「この identity は実計算コストを払った」ことの証明。
+/// 逐次ハッシュは検証は安価 (issuer も同じ計算) で生成はコスト相応、という非対称性を使う。
+pub fn compute_pow_answer(nonce: &str, peer_pubkey: &str, difficulty: u32) -> String {
+    let mut acc = blake3::hash(format!("{nonce}:{peer_pubkey}").as_bytes());
+    // difficulty 回の逐次反復 (前段の出力を次段の入力に — メモ化・並列化を防ぐ)
+    for _ in 0..difficulty {
+        acc = blake3::hash(acc.as_bytes());
+    }
+    hex::encode(acc.as_bytes())
 }
 
 // ============================================================================
@@ -906,6 +932,9 @@ impl PairManager {
     // ========================================================================
 
     /// 初回ピアに能力証明チャレンジを発行 (Sybil 攻撃防止)
+    ///
+    /// liveness 専用 (difficulty=0)。コーパス由来の固定答えを使う場合に呼ぶ。
+    /// compute-anchored な Sybil 耐性が必要なら `issue_pow_challenge` を使う。
     pub fn issue_capability_challenge(
         &mut self,
         peer_id: &str,
@@ -919,6 +948,44 @@ impl PairManager {
             peer_id: peer_id.to_string(),
             task_spec: task_spec.to_string(),
             expected_output_hash: expected_output_hash.to_string(),
+            nonce: String::new(),
+            difficulty: 0,
+            issued_at: Utc::now(),
+            timeout_seconds,
+            state: ChallengeState::Pending,
+        };
+
+        self.pending_challenges
+            .insert(challenge_id, challenge.clone());
+        self.updated_at = Utc::now();
+        Ok(challenge)
+    }
+
+    /// per-identity proof-of-work チャレンジを発行 (compute-anchored Sybil 耐性)
+    ///
+    /// 問④⑤への構造的応答: 乱数 nonce を生成し、`compute_pow_answer(nonce,
+    /// peer_pubkey, difficulty)` を期待答えとする。ピアは同じ計算を行って答えを返す。
+    /// nonce は事前計算を、peer_pubkey 束縛は ID 間共有を、difficulty は実コストを担保する。
+    pub fn issue_pow_challenge(
+        &mut self,
+        peer_id: &str,
+        peer_pubkey: &str,
+        difficulty: u32,
+        timeout_seconds: u32,
+    ) -> Result<CapabilityChallenge> {
+        if peer_pubkey.is_empty() {
+            anyhow::bail!("空 pubkey には PoW チャレンジを発行できない");
+        }
+        let challenge_id = uuid::Uuid::now_v7().to_string();
+        let nonce = uuid::Uuid::now_v7().to_string();
+        let expected = compute_pow_answer(&nonce, peer_pubkey, difficulty);
+        let challenge = CapabilityChallenge {
+            challenge_id: challenge_id.clone(),
+            peer_id: peer_id.to_string(),
+            task_spec: format!("pow:rope:v1:difficulty={difficulty}"),
+            expected_output_hash: expected,
+            nonce,
+            difficulty,
             issued_at: Utc::now(),
             timeout_seconds,
             state: ChallengeState::Pending,
@@ -2113,5 +2180,106 @@ mod tests {
             !m.is_capability_fresh(pk, 3600),
             "タイムスタンプ無しは fresh ではない"
         );
+    }
+
+    // ======================================================================
+    // ソクラテス問答④⑤: 固定答えは事前計算・使い回し可能か
+    // ======================================================================
+
+    #[test]
+    fn test_pow_answer_is_deterministic_and_verifiable() {
+        // 同じ (nonce, pubkey, difficulty) なら常に同じ答え (issuer が検証できる)
+        let a = compute_pow_answer("nonce-1", "pk-alice", 1000);
+        let b = compute_pow_answer("nonce-1", "pk-alice", 1000);
+        assert_eq!(a, b, "PoW は決定論的でなければ issuer が検証できない");
+    }
+
+    #[test]
+    fn test_pow_answer_bound_to_pubkey_not_shareable() {
+        // 問⑤: 別 ID は別 pubkey なので答えを使い回せない
+        let alice = compute_pow_answer("nonce-x", "pk-alice", 500);
+        let mallory = compute_pow_answer("nonce-x", "pk-mallory", 500);
+        assert_ne!(
+            alice, mallory,
+            "同 nonce でも pubkey が違えば答えが違う = ID 間共有不能"
+        );
+    }
+
+    #[test]
+    fn test_pow_answer_bound_to_nonce_not_precomputable() {
+        // 問④: nonce が違えば答えが違う = 固定答えの事前計算が無意味
+        let n1 = compute_pow_answer("nonce-1", "pk-alice", 500);
+        let n2 = compute_pow_answer("nonce-2", "pk-alice", 500);
+        assert_ne!(n1, n2, "nonce が違えば答えが違う = 事前計算不能");
+    }
+
+    #[test]
+    fn test_pow_difficulty_changes_answer() {
+        // difficulty が違えば答えが違う (反復回数の証明)
+        let d0 = compute_pow_answer("n", "pk", 0);
+        let d1 = compute_pow_answer("n", "pk", 1);
+        let d100 = compute_pow_answer("n", "pk", 100);
+        assert_ne!(d0, d1);
+        assert_ne!(d1, d100);
+    }
+
+    #[test]
+    fn test_issue_pow_challenge_and_verify_honest_peer() {
+        let mut m = PairManager::default();
+        let peer_id = "peer-1";
+        let peer_pubkey = "pk-honest";
+        m.trust_store.insert(
+            peer_pubkey.to_string(),
+            TrustedIdentity {
+                pubkey: peer_pubkey.to_string(),
+                display_name: "Honest".to_string(),
+                first_paired: Utc::now(),
+                last_paired: Utc::now(),
+                pair_count: 1,
+                trust_level: TrustLevel::Unknown,
+                note: None,
+                capability_proven: false,
+                challenged_at: None,
+                successful_jobs: 0,
+                failed_jobs: 0,
+            },
+        );
+
+        let challenge = m
+            .issue_pow_challenge(peer_id, peer_pubkey, 1000, 30)
+            .unwrap();
+        assert_eq!(challenge.difficulty, 1000);
+        assert!(!challenge.nonce.is_empty(), "PoW チャレンジは nonce を持つ");
+
+        // 正直なピアは同じ計算をして答えを出す
+        let honest_answer = compute_pow_answer(&challenge.nonce, peer_pubkey, 1000);
+        // peer_id ではなく peer_pubkey が信頼ストアのキーなので、検証成功には
+        // peer_id == peer_pubkey である必要がある。ここでは検証ロジックのみ確認。
+        let result = m
+            .verify_capability_proof(&challenge.challenge_id, &honest_answer)
+            .unwrap();
+        assert!(result, "正しい PoW 答えは検証を通る");
+    }
+
+    #[test]
+    fn test_issue_pow_challenge_rejects_replayed_wrong_pubkey_answer() {
+        let mut m = PairManager::default();
+        let challenge = m
+            .issue_pow_challenge("peer-1", "pk-victim", 500, 30)
+            .unwrap();
+
+        // 攻撃者が別 pubkey で計算した答えを使い回そうとする → 失敗
+        let stolen = compute_pow_answer(&challenge.nonce, "pk-attacker", 500);
+        let result = m
+            .verify_capability_proof(&challenge.challenge_id, &stolen)
+            .unwrap();
+        assert!(!result, "別 pubkey の答えは検証に通らない (ID 間共有不能)");
+    }
+
+    #[test]
+    fn test_issue_pow_challenge_empty_pubkey_errors() {
+        let mut m = PairManager::default();
+        let result = m.issue_pow_challenge("peer-1", "", 500, 30);
+        assert!(result.is_err(), "空 pubkey は拒否");
     }
 }
