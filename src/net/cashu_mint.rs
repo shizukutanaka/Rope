@@ -414,9 +414,17 @@ use crate::core::ecash::{Mint as EcashMint, Proof};
 /// 入力:
 ///   - `mint_id`: rope 内 mint registry の ID
 ///   - `secrets`: 自分が出力した blinded message に対応する 32 byte secret 群 (mint_tokens 呼出側で生成保管)
+///   - `expected_amounts`: 自分が要求した額面群 (build_blinded_outputs に渡したもの)
 ///   - `signatures`: mint からの応答
 ///
 /// 出力: ecash wallet に格納可能な Proof 群
+///
+/// ## 完全性検証 (問⑲)
+/// mint の応答を無検証で信頼すると、悪意ある/バグった mint が額面 (`amount`) を
+/// すり替えたり別 keyset で署名したものをウォレットが受理してしまう。
+/// blinded message には額面が commit されている (build_blinded_outputs の B' は
+/// amount を含む) ので、戻り値の `sig.amount` が要求額面と一致し、`sig.id` が
+/// 期待 keyset と一致することを位置ごとに検証する。
 ///
 /// 注意: 実 BDHHKE では C = unblinded(C') を計算するが、本実装は
 /// pure logic ゲートウェイとして blinded C をそのまま signature に格納する。
@@ -425,6 +433,7 @@ pub fn translate_signatures_to_proofs(
     mint_id: &str,
     keyset_id: &str,
     secrets: &[Vec<u8>],
+    expected_amounts: &[u64],
     signatures: &[BlindSignature],
 ) -> anyhow::Result<Vec<Proof>> {
     if secrets.len() != signatures.len() {
@@ -434,10 +443,37 @@ pub fn translate_signatures_to_proofs(
             signatures.len()
         );
     }
+    if expected_amounts.len() != signatures.len() {
+        anyhow::bail!(
+            "expected_amounts と signatures の数が不一致: {} vs {}",
+            expected_amounts.len(),
+            signatures.len()
+        );
+    }
     let mut proofs = Vec::with_capacity(signatures.len());
-    for (secret_bytes, sig) in secrets.iter().zip(signatures.iter()) {
+    for ((secret_bytes, sig), &expected) in secrets
+        .iter()
+        .zip(signatures.iter())
+        .zip(expected_amounts.iter())
+    {
         if secret_bytes.len() != 32 {
             anyhow::bail!("secret は 32 byte 必須 ({})", secret_bytes.len());
+        }
+        // 問⑲: mint が額面をすり替えていないか検証
+        if sig.amount != expected {
+            anyhow::bail!(
+                "mint が要求と異なる額面を署名: 要求 {} != 応答 {} (mint 不正/バグ)",
+                expected,
+                sig.amount
+            );
+        }
+        // 問⑲: mint が期待 keyset で署名しているか検証
+        if sig.id != keyset_id {
+            anyhow::bail!(
+                "mint が別 keyset で署名: 期待 {} != 応答 {} (信頼境界違反)",
+                keyset_id,
+                sig.id
+            );
         }
         let secret_hex = hex::encode(secret_bytes);
         let null_hash = blake3::hash(secret_bytes);
@@ -677,7 +713,7 @@ mod tests {
                 c_: "y".to_string(),
             },
         ];
-        let r = translate_signatures_to_proofs("m1", "k", &secrets, &sigs);
+        let r = translate_signatures_to_proofs("m1", "k", &secrets, &[1], &sigs);
         assert!(r.is_err());
     }
 
@@ -698,7 +734,8 @@ mod tests {
                     .to_string(),
             },
         ];
-        let proofs = translate_signatures_to_proofs("m1", "keyset_aa", &secrets, &sigs).unwrap();
+        let proofs =
+            translate_signatures_to_proofs("m1", "keyset_aa", &secrets, &[2, 8], &sigs).unwrap();
         assert_eq!(proofs.len(), 2);
         assert_eq!(proofs[0].amount_sats, 2);
         assert_eq!(proofs[0].keyset_id, "keyset_aa");
@@ -711,6 +748,63 @@ mod tests {
         assert_eq!(proofs[0].signature, sigs[0].c_);
     }
 
+    /// 問⑲: mint が要求と異なる額面を署名したら拒否する
+    #[test]
+    fn test_translate_rejects_amount_tampering() {
+        let (secrets, _) = build_blinded_outputs("keyset_aa", &[2, 8]);
+        // mint が 2 番目の額面を 8 → 64 にすり替え
+        let sigs = vec![
+            BlindSignature {
+                amount: 2,
+                id: "keyset_aa".to_string(),
+                c_: "02aa".to_string(),
+            },
+            BlindSignature {
+                amount: 64, // すり替え!
+                id: "keyset_aa".to_string(),
+                c_: "03bb".to_string(),
+            },
+        ];
+        let r = translate_signatures_to_proofs("m1", "keyset_aa", &secrets, &[2, 8], &sigs);
+        assert!(r.is_err(), "額面すり替えは拒否されるべき");
+        assert!(r.unwrap_err().to_string().contains("額面"));
+    }
+
+    /// 問⑲: mint が別 keyset で署名したら拒否する
+    #[test]
+    fn test_translate_rejects_wrong_keyset() {
+        let (secrets, _) = build_blinded_outputs("keyset_aa", &[2]);
+        let sigs = vec![BlindSignature {
+            amount: 2,
+            id: "keyset_EVIL".to_string(), // 別 keyset
+            c_: "02aa".to_string(),
+        }];
+        let r = translate_signatures_to_proofs("m1", "keyset_aa", &secrets, &[2], &sigs);
+        assert!(r.is_err(), "別 keyset 署名は拒否されるべき");
+        assert!(r.unwrap_err().to_string().contains("keyset"));
+    }
+
+    /// 問⑲: expected_amounts の件数不一致を検出する
+    #[test]
+    fn test_translate_rejects_expected_amount_count_mismatch() {
+        let (secrets, _) = build_blinded_outputs("k", &[2, 8]);
+        let sigs = vec![
+            BlindSignature {
+                amount: 2,
+                id: "k".to_string(),
+                c_: "a".to_string(),
+            },
+            BlindSignature {
+                amount: 8,
+                id: "k".to_string(),
+                c_: "b".to_string(),
+            },
+        ];
+        // expected_amounts が 1 件しかない
+        let r = translate_signatures_to_proofs("m", "k", &secrets, &[2], &sigs);
+        assert!(r.is_err());
+    }
+
     #[test]
     fn test_translate_rejects_wrong_secret_size() {
         let secrets = vec![vec![1u8; 16]]; // 半端
@@ -719,7 +813,7 @@ mod tests {
             id: "k".to_string(),
             c_: "x".to_string(),
         }];
-        assert!(translate_signatures_to_proofs("m", "k", &secrets, &sigs).is_err());
+        assert!(translate_signatures_to_proofs("m", "k", &secrets, &[1], &sigs).is_err());
     }
 
     /// MintQuoteResponse の serde roundtrip — wire 互換性保証

@@ -149,7 +149,7 @@ impl LockGuard {
         fs::create_dir_all(&dir).ok();
         let path = dir.join(format!("{}.lock", name));
 
-        for attempt in 0..20 {
+        for _ in 0..20 {
             match fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -161,10 +161,13 @@ impl LockGuard {
                     return Ok(LockGuard { path });
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    // stale lock 判定: PID が死んでいれば奪取
-                    if attempt == 0 && Self::is_stale(&path) {
-                        fs::remove_file(&path).ok();
-                        continue;
+                    // stale lock 判定: PID が死んでいれば奪取。
+                    // 問⑳: 旧実装は attempt==0 のみ判定していたため、保持プロセスが
+                    // 取得待ちの途中 (~2 秒) でクラッシュすると stale が永久に検出されず、
+                    // 全タイムアウトを待った末に「別プロセスが保持中」で失敗していた。
+                    // 毎試行で判定して dead holder を即座に奪取する。
+                    if Self::try_reclaim_stale(&path) {
+                        continue; // 奪取成功 → 即座に再 create_new
                     }
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
@@ -174,16 +177,33 @@ impl LockGuard {
         anyhow::bail!("ロック取得失敗 ({}): 別プロセスが保持中", name)
     }
 
-    /// ロック保持プロセスが死んでいるか (stale lock 検出)
-    fn is_stale(path: &std::path::Path) -> bool {
+    /// stale (保持プロセス死亡) なら奪取を試みる。奪取できたら true。
+    ///
+    /// 削除前に PID を再読込し、最初に観測した dead PID と一致する場合のみ削除する。
+    /// これにより「A が stale 判定 → B が奪取して live lock 作成 → A が B の live lock を
+    /// 削除」という二重奪取レースの窓を狭める (std のみでは完全排除は不可)。
+    fn try_reclaim_stale(path: &std::path::Path) -> bool {
         let pid = match fs::read_to_string(path)
             .ok()
             .and_then(|s| s.trim().parse::<u32>().ok())
         {
             Some(p) => p,
-            None => return true, // PID 読めない = 壊れたロック = stale
+            None => {
+                // PID 読めない = 壊れたロック。そのまま消して奪取を試みる。
+                return fs::remove_file(path).is_ok();
+            }
         };
-        Self::is_process_dead(pid, path)
+        if !Self::is_process_dead(pid, path) {
+            return false; // 保持プロセスは生存中 — 奪取しない
+        }
+        // 削除直前に再読込し、同じ dead PID のままか確認する (レース緩和)。
+        match fs::read_to_string(path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+        {
+            Some(p) if p == pid => fs::remove_file(path).is_ok(),
+            _ => false, // 別プロセスが既に奪取/書換え済み — 触らない
+        }
     }
 
     /// PID が死亡しているか。`/proc` がある Linux では PID を直接確認する。
@@ -651,5 +671,45 @@ mod tests {
         let g = LockGuard::acquire(&name).expect("stale lock を奪取");
         drop(g);
         std::fs::remove_file(&lock_path).ok();
+    }
+
+    /// 問⑳: try_reclaim_stale は dead PID を奪取し、live PID (= 自プロセス) は保護する。
+    #[test]
+    fn test_try_reclaim_stale_protects_live_holder() {
+        let dir = config_dir().join("lock");
+        std::fs::create_dir_all(&dir).ok();
+
+        // dead PID → 奪取できる (ファイル削除)
+        let dead_path = dir.join(format!("reclaim_dead_{}.lock", std::process::id()));
+        std::fs::write(&dead_path, "999999999").unwrap();
+        assert!(
+            LockGuard::try_reclaim_stale(&dead_path),
+            "dead holder は奪取できる"
+        );
+        assert!(!dead_path.exists(), "奪取後はロックファイルが消える");
+
+        // live PID (自分自身) → 奪取しない (保護)
+        let live_path = dir.join(format!("reclaim_live_{}.lock", std::process::id()));
+        std::fs::write(&live_path, format!("{}", std::process::id())).unwrap();
+        assert!(
+            !LockGuard::try_reclaim_stale(&live_path),
+            "生存プロセスのロックは奪取してはならない"
+        );
+        assert!(live_path.exists(), "生存ロックは消されない");
+        std::fs::remove_file(&live_path).ok();
+    }
+
+    /// 問⑳: 壊れた (PID 読めない) ロックは奪取して消す。
+    #[test]
+    fn test_try_reclaim_stale_removes_corrupt_lock() {
+        let dir = config_dir().join("lock");
+        std::fs::create_dir_all(&dir).ok();
+        let path = dir.join(format!("reclaim_corrupt_{}.lock", std::process::id()));
+        std::fs::write(&path, "not-a-pid").unwrap();
+        assert!(
+            LockGuard::try_reclaim_stale(&path),
+            "壊れたロックは奪取できる"
+        );
+        assert!(!path.exists());
     }
 }

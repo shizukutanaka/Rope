@@ -11,7 +11,7 @@
 2. **状態機械が明快** — `ecash` / `pair` / `confidential` / `intent` が型と状態遷移で
    表現され、純ロジックとして単体テスト可能。I/O と分離されている。
 3. **品質ゲートが厳格** — `clippy -D warnings` / `fmt --check` / `unsafe_code = deny` を
-   CI 級に強制。テスト 215 (default) / 221 (http)、全 4 動詞 graceful exit。
+   CI 級に強制。テスト 225 (default) / 231 (http)、全 4 動詞 graceful exit。
 4. **依存最小主義** — HTTP は opt-in feature、edition2024 を避けた上限固定で
    ビルド再現性を確保。
 5. **正直なフォールバック設計** — TEE 非対応や検証なしを「できるフリ」せず、
@@ -42,7 +42,9 @@
 | escrow 解放に検証ゲート (#1×#5, free-riding 防止) | ✅ 改良済 | `af421e9` |
 | **Sybil 耐性 (proof-of-capability + 評判スコア)** | ✅ 改良済 | `a84d162` |
 | **ecash 3 欠陥 (問⑪⑫⑬)** | ✅ 改良済 | `741f99d` |
-| **session 安全/権限プリミティブ硬化 (問⑭⑮)** | ✅ **本コミット** | (this) |
+| **session 安全/権限プリミティブ硬化 (問⑭⑮)** | ✅ 改良済 | `b17864a` |
+| **confidential/intent 3 欠陥 (問⑯⑰⑱)** | ✅ 改良済 | `06a6693` |
+| **mint 額面検証 + lock liveness (問⑲⑳)** | ✅ **本コミット** | (this) |
 | NAT 越え (libp2p DCUtR) / Noise 実結線 | ⏳ 大 | — |
 | 検証本体 (VeriLLM 風 再実行 / TOPLOC LSH) | ⏳ 大 | — |
 | 永続化 (ecash 状態の WAL/crash recovery) | ⏳ 中 | — |
@@ -120,6 +122,37 @@ tick 呼び出しを怠ると次回 tick 時に巨大な elapsed が発生し、
 不正署名形式 / 失効境界 / 上限境界 / 結合ゲート。すべて決定的鍵で hermetic（FS/docker 不使用）。
 
 テスト 215 (default) / clippy・fmt 全クリーン。
+
+### ソクラテス式問答 Round 7 — 実 I/O 経路の「リモートを無検証で信頼する」欠陥
+
+着眼: `cashu_mint.rs` (唯一の実 HTTP I/O) と `config.rs` (鍵・ロックの実 FS I/O) は
+外部 (mint / 他プロセス) の応答をそのまま信頼していた。
+
+**問⑲「mint が返した額面 (`sig.amount`) は誰が検証するか？」**
+
+`translate_signatures_to_proofs` は mint 応答の `sig.amount` をそのまま Proof に格納し、
+要求額面との一致も keyset id の一致も検証していなかった。
+悪意ある/バグった mint が額面をすり替え (例: 8 → 64 sat) たり別 keyset で署名したものを
+ウォレットが受理し、残高完全性が壊れる。
+
+修正: `expected_amounts: &[u64]` を引数に追加し、位置ごとに `sig.amount == expected` と
+`sig.id == keyset_id` を検証。不一致は `Err`。blinded message の B' は額面を commit している
+ので、戻り値での再検証は意味的に正しい。
+
+**問⑳「lock 保持プロセスが取得待ちの途中で死んだら？」**
+
+`LockGuard::acquire` の stale 判定は `attempt == 0` のみだった。保持プロセスが取得待ちの
+~2 秒間にクラッシュすると stale が永久に検出されず、全タイムアウトを待って
+「別プロセスが保持中」で失敗する (liveness バグ)。
+
+修正: 毎試行で `try_reclaim_stale` を呼び dead holder を即奪取。削除前に PID を再読込し
+最初に観測した dead PID と一致する場合のみ削除して、二重奪取レースの窓を狭めた
+(生存ロックは保護)。
+
+**テスト追加 (+5 件):** 額面すり替え拒否 / 別 keyset 拒否 / expected_amounts 件数不一致 /
+dead holder 奪取 + live holder 保護 / 壊れたロック奪取。
+
+テスト 225 (default) / 231 (http) / clippy・fmt 全クリーン。
 
 ## 次の一手 (推奨順)
 
