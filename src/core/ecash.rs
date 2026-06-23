@@ -36,16 +36,20 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 /// 使用済み nullifier の追跡。
 ///
-/// FIFO 順序 (容量上限での最古排出) と O(1) 二重使用検出を両立する。
-/// 旧実装は `Vec<String>` で `contains` が O(n) だったため、受信ホットパスで
-/// 履歴件数に比例して劣化していた。集合で membership を O(1) 化しつつ、
-/// `order` で排出順序を保つ。
+/// O(1) 二重使用検出。容量上限では **eviction しない**。
+///
+/// eviction により古い nullifier が集合から除去されると、その nullifier を持つトークンを
+/// 再提示しても二重使用として検出できなくなる (sliding window double-spend 攻撃)。
+/// 上限到達後は新規 record を拒否し `overflow = true` を立てる。
+/// 呼び出し元は `overflow` を確認してトランザクションを中断すること。
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SpentNullifiers {
-    /// 挿入順 (容量超過時に古い順へ排出するため)
     order: VecDeque<String>,
     /// 二重使用検出用の集合 (O(1) lookup)
     set: HashSet<String>,
+    /// 容量上限超過フラグ。true になると false には戻らない。
+    #[serde(default)]
+    pub overflow: bool,
 }
 
 impl SpentNullifiers {
@@ -54,17 +58,21 @@ impl SpentNullifiers {
         self.set.contains(nullifier)
     }
 
-    /// nullifier を記録。容量上限を超えたら最古を排出する。
-    /// 重複記録は no-op (件数を増やさない)。
-    pub fn record(&mut self, nullifier: String, capacity: usize) {
-        if self.set.insert(nullifier.clone()) {
-            self.order.push_back(nullifier);
+    /// nullifier を記録。容量上限到達時は eviction せず `false` を返す。
+    /// 重複記録は no-op で `true` を返す (既追跡のため問題なし)。
+    /// `false` を受け取った呼び出し元はトランザクションを中断すること。
+    pub fn record(&mut self, nullifier: String, capacity: usize) -> bool {
+        if self.set.contains(&nullifier) {
+            return true; // 既追跡 — 二重使用として検出済み、no-op
         }
-        while self.order.len() > capacity {
-            if let Some(old) = self.order.pop_front() {
-                self.set.remove(&old);
-            }
+        if self.order.len() >= capacity {
+            // eviction は sliding window 攻撃を招くため行わない
+            self.overflow = true;
+            return false;
         }
+        self.set.insert(nullifier.clone());
+        self.order.push_back(nullifier);
+        true
     }
 
     /// 記録済み nullifier 数。
@@ -348,6 +356,10 @@ pub struct EcashConfig {
     pub auto_split_on_dispute: bool,
     /// nullifier キャッシュ容量
     pub max_nullifier_history: usize,
+    /// tick_stream 1 回あたりの elapsed 上限 (秒)。
+    /// tick 呼び出し元のローカルクロックを信頼するため、放置や時刻ジャンプで
+    /// 1 tick が過大な残高を消費しないよう上限を設ける。
+    pub max_tick_interval_seconds: u64,
 }
 
 impl Default for EcashConfig {
@@ -363,6 +375,7 @@ impl Default for EcashConfig {
             min_federated_guardians: 3,
             auto_split_on_dispute: false,
             max_nullifier_history: 100_000,
+            max_tick_interval_seconds: 60,
         }
     }
 }
@@ -531,10 +544,17 @@ impl EcashManager {
         let spent_total: u64 = spent.iter().map(|p| p.amount_sats).sum();
         self.wallet.total_sats = self.wallet.total_sats.saturating_sub(spent_total);
 
-        // nullifier 記録 (FIFO 容量制限 + O(1) 二重使用検出)
+        // nullifier 記録。容量超過は sliding window 攻撃になるため即中断。
         for p in &spent {
-            self.spent_nullifiers
-                .record(p.nullifier.clone(), self.config.max_nullifier_history);
+            if !self
+                .spent_nullifiers
+                .record(p.nullifier.clone(), self.config.max_nullifier_history)
+            {
+                anyhow::bail!(
+                    "nullifier ストア満杯 (上限 {}) — max_nullifier_history を増やすか再起動してください",
+                    self.config.max_nullifier_history
+                );
+            }
         }
 
         self.stats.total_proofs_spent_sats += spent_total;
@@ -713,7 +733,9 @@ impl EcashManager {
         if proof.trim().is_empty() {
             return false;
         }
-        if let Some(idx) = condition.rfind("==") {
+        // find (最初の "==") を使う。rfind は "label==hash==extra" のような
+        // 条件で末尾の "extra" のみを expected として抽出してしまう誤りを招く。
+        if let Some(idx) = condition.find("==") {
             let expected = condition[idx + 2..].trim();
             if expected.is_empty() {
                 return false;
@@ -925,9 +947,11 @@ impl EcashManager {
             return Ok(0);
         }
 
-        // クロックスキューや長時間放置 (大きな elapsed) でも panic させない。
-        // saturating で頭打ちにし、remaining で上限を切る (同モジュール 487/643 と一貫)。
-        let elapsed_sec = (now - s.last_tick_at).num_seconds().max(0) as u64;
+        // tick 呼び出し間隔はローカルクロックで計測するため外部から操作可能。
+        // max_tick_interval_seconds で 1 tick の最大消費を上限規制し、
+        // 放置・時刻ジャンプによる過大ドレインを防ぐ。
+        let raw_elapsed = (now - s.last_tick_at).num_seconds().max(0) as u64;
+        let elapsed_sec = raw_elapsed.min(self.config.max_tick_interval_seconds);
         let delta = elapsed_sec.saturating_mul(s.rate_sats_per_second);
         let remaining = s.total_locked_sats.saturating_sub(s.drained_sats);
         let to_drain = delta.min(remaining);
@@ -1193,34 +1217,73 @@ mod tests {
         // このテストはマネージャ間ではなく、同一マネージャで spend 後の再 receive
         let cap = m.config.max_nullifier_history;
         for p in &spent {
-            m.spent_nullifiers.record(p.nullifier.clone(), cap);
+            assert!(m.spent_nullifiers.record(p.nullifier.clone(), cap));
         }
         let result = m.receive_proofs(spent);
         assert!(result.is_err());
         assert_eq!(m.stats.double_spend_attempts_blocked, 1);
     }
 
-    /// SpentNullifiers: O(1) membership + FIFO 容量排出 + 重複 no-op
+    /// 問⑪: SpentNullifiers は容量超過時に eviction せず overflow=true を立てる。
+    /// eviction は sliding window 二重使用攻撃を生む。
     #[test]
-    fn test_spent_nullifiers_fifo_capacity_and_membership() {
+    fn test_spent_nullifiers_overflow_rejects_not_evicts() {
         let mut s = SpentNullifiers::default();
         assert!(s.is_empty());
-        // capacity 3 で 3 件記録
+        assert!(!s.overflow);
+
+        // capacity 3 で 3 件記録 — すべて成功
         for n in ["a", "b", "c"] {
-            s.record(n.to_string(), 3);
+            assert!(s.record(n.to_string(), 3), "容量内は true");
         }
         assert_eq!(s.len(), 3);
         assert!(s.contains("a") && s.contains("b") && s.contains("c"));
+        assert!(!s.overflow);
 
-        // 4 件目で最古 "a" が FIFO 排出される
-        s.record("d".to_string(), 3);
-        assert_eq!(s.len(), 3);
-        assert!(!s.contains("a"), "最古 nullifier は容量超過で排出される");
-        assert!(s.contains("b") && s.contains("c") && s.contains("d"));
+        // 4 件目: 容量超過 → false を返す、既存 nullifier は eviction されない
+        assert!(!s.record("d".to_string(), 3), "容量超過は false");
+        assert_eq!(s.len(), 3, "eviction しないので件数変化なし");
+        assert!(
+            s.contains("a"),
+            "最古 nullifier は排出されない (sliding window 防止)"
+        );
+        assert!(
+            !s.contains("d"),
+            "受け入れられなかった nullifier は集合に入らない"
+        );
+        assert!(s.overflow, "overflow フラグが立つ");
 
-        // 重複記録は件数を増やさない (no-op)
-        s.record("d".to_string(), 3);
+        // 重複記録 (既追跡) は容量に関係なく true (二重使用として検出済みの証)
+        assert!(s.record("a".to_string(), 3), "既追跡は no-op で true");
         assert_eq!(s.len(), 3);
+    }
+
+    /// 問⑪: spend_proofs が nullifier ストア満杯でトランザクションを中断する
+    #[test]
+    fn test_spend_proofs_bails_on_nullifier_overflow() {
+        let mut m = EcashManager::default();
+        m.config.max_nullifier_history = 1; // 意図的に小さく
+        m.add_mint(test_mint("mint1")).unwrap();
+        m.trust_mint("mint1", MintTrust::Trusted).unwrap();
+        m.mint_tokens("mint1", 500).unwrap();
+
+        // 1 件目の spend: 1 sat = 1 proof = 1 nullifier → 上限 (capacity=1) に到達
+        let proofs1 = m.mint_tokens("mint1", 1).unwrap();
+        assert_eq!(proofs1.len(), 1, "1 sat は 1 proof");
+        let ids1: Vec<String> = proofs1.iter().map(|p| p.id.clone()).collect();
+        m.spend_proofs("mint1", &ids1).unwrap(); // ストア: 1/1 (満杯)
+
+        // 2 件目の spend: ストア満杯 → Err (eviction せず sliding window 攻撃防止)
+        let proofs2 = m.mint_tokens("mint1", 2).unwrap();
+        assert_eq!(proofs2.len(), 1, "2 sat は 1 proof");
+        let ids2: Vec<String> = proofs2.iter().map(|p| p.id.clone()).collect();
+        let result = m.spend_proofs("mint1", &ids2);
+        assert!(result.is_err(), "nullifier ストア満杯で spend は中断される");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("満杯"),
+            "エラーメッセージに満杯を含む: {err_msg}"
+        );
     }
 
     #[test]
@@ -1267,6 +1330,29 @@ mod tests {
         assert!(!EcashManager::proof_satisfies("cond", ""));
         // 右辺が空の条件は不可
         assert!(!EcashManager::proof_satisfies("hash==", "anything"));
+    }
+
+    /// 問⑫: rfind ではなく find を使うことで複数 "==" を含む条件を正しく処理する。
+    /// rfind だと "label==value1==value2" の expected が "value2" のみになる誤りを生じた。
+    #[test]
+    fn test_proof_satisfies_multi_eq_uses_first_separator() {
+        // "label==value1==value2" → expected = "value1==value2" (find) であるべき
+        let cond = "label==value1==value2";
+        assert!(
+            EcashManager::proof_satisfies(cond, "value1==value2"),
+            "最初の == を区切りとして右辺全体が expected になるべき"
+        );
+        assert!(
+            !EcashManager::proof_satisfies(cond, "value2"),
+            "rfind 由来の末尾だけでは一致しない (find への修正確認)"
+        );
+        // blake3 hash の expected がたまたま "==" を含む (実運用ではないが境界確認)
+        let fake_hash = "abc==def";
+        let cond2 = format!("result=={fake_hash}");
+        assert!(
+            EcashManager::proof_satisfies(&cond2, fake_hash),
+            "expected 値内の == を誤ってセパレータにしない"
+        );
     }
 
     #[test]
@@ -1386,6 +1472,38 @@ mod tests {
 
         let drained = m.tick_stream(&s.id).unwrap();
         assert_eq!(drained, 100); // total_locked_sats で頭打ち、オーバーフローなし
+    }
+
+    /// 問⑬: tick_stream の elapsed は max_tick_interval_seconds で上限規制される。
+    /// tick 呼び出しを怠った (または時刻が大きくジャンプした) ときに
+    /// 1 回の tick で過大な残高を消費しないことを確認する。
+    #[test]
+    fn test_tick_stream_elapsed_capped_by_max_interval() {
+        let mut m = EcashManager::default();
+        m.config.max_tick_interval_seconds = 60; // 既定値を明示
+        m.add_mint(test_mint("mint1")).unwrap();
+        m.trust_mint("mint1", MintTrust::Trusted).unwrap();
+        m.mint_tokens("mint1", 100_000).unwrap();
+
+        let rate = 10u64; // sat/sec
+        let s = m
+            .open_stream("job1", "pk-a", "pk-b", "mint1", 10_000, rate)
+            .unwrap();
+
+        // last_tick_at を 300 秒前に設定 (max_tick_interval_seconds の 5 倍)
+        m.streams
+            .iter_mut()
+            .find(|x| x.id == s.id)
+            .unwrap()
+            .last_tick_at = Utc::now() - chrono::Duration::seconds(300);
+
+        let drained = m.tick_stream(&s.id).unwrap();
+        // 上限なし: 300 * 10 = 3000 sat になるはずが、
+        // cap 60 秒: 60 * 10 = 600 sat に制限される
+        assert_eq!(
+            drained, 600,
+            "1 tick のドレインは max_tick_interval_seconds * rate に制限"
+        );
     }
 
     #[test]

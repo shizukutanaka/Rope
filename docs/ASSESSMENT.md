@@ -1,6 +1,6 @@
 # 現段階の評価 — 長所 / 短所 / 改善点
 
-> 評価日: 2026-06-05 / 対象: Rope (branch `claude/deepresearch-ultrathink-improve-wnYtn`)
+> 評価日: 2026-06-23 / 対象: Rope (branch `claude/deepresearch-ultrathink-improve-wnYtn`)
 > 関連: [`RESEARCH_IMPROVEMENTS.md`](RESEARCH_IMPROVEMENTS.md)（優先度バックログ）,
 > [`CATEGORY_RESEARCH.md`](CATEGORY_RESEARCH.md)（10カテゴリ調査）
 
@@ -11,7 +11,7 @@
 2. **状態機械が明快** — `ecash` / `pair` / `confidential` / `intent` が型と状態遷移で
    表現され、純ロジックとして単体テスト可能。I/O と分離されている。
 3. **品質ゲートが厳格** — `clippy -D warnings` / `fmt --check` / `unsafe_code = deny` を
-   CI 級に強制。テスト 185 (default) / 191 (http)、全 4 動詞 graceful exit。
+   CI 級に強制。テスト 208 (default) / 214 (http)、全 4 動詞 graceful exit。
 4. **依存最小主義** — HTTP は opt-in feature、edition2024 を避けた上限固定で
    ビルド再現性を確保。
 5. **正直なフォールバック設計** — TEE 非対応や検証なしを「できるフリ」せず、
@@ -40,41 +40,51 @@
 | README の TEE プライバシー前提を明記 | ✅ 改良済 | `3708da3` |
 | `EnergyPreference` を resolver に配線 (#13-2) | ✅ 改良済 | `6bfb6da` |
 | escrow 解放に検証ゲート (#1×#5, free-riding 防止) | ✅ 改良済 | `af421e9` |
-| **Sybil 耐性 (proof-of-capability + 評判スコア)** | ✅ **本コミット** | (this) |
+| **Sybil 耐性 (proof-of-capability + 評判スコア)** | ✅ 改良済 | `a84d162` |
+| **ecash 3 欠陥 (問⑪⑫⑬)** | ✅ **本コミット** | (this) |
 | NAT 越え (libp2p DCUtR) / Noise 実結線 | ⏳ 大 | — |
 | 検証本体 (VeriLLM 風 再実行 / TOPLOC LSH) | ⏳ 大 | — |
 | 永続化 (ecash 状態の WAL/crash recovery) | ⏳ 中 | — |
 | `RegionConstraint` 配線 (プロバイダ地域メタ必要) | ⏳ 保留 | — |
 
-### 本セッションの改良の要点 (Proof-of-Capability Sybil 耐性)
+### ソクラテス式問答 Round 5 — ecash.rs の 3 欠陥
 
-初回ピア（Unknown trust level）に対する Sybil 攻撃リスクに対応。FORTYTWO 論文の
-compute-anchored 能力証明を実装:
+**問⑪「SpentNullifiers の capacity を超えたとき何が起きるか？」**
 
-**実装内容:**
-- `CapabilityChallenge` struct: チャレンジ ID / task spec / expected output hash / state machine
-- PairManager メソッド群:
-  - `issue_capability_challenge()` — 初回ピアに task を発行 (nonce + timeout で一意性確保)
-  - `verify_capability_proof()` — 出力ハッシュ一致で capability_proven に昇格
-  - `reputation_score()` — successful/failed ratio で 0.0-1.0 スコア計算
-  - `is_capability_proven_or_trusted()` — proven OR (Familiar|Trusted|OwnDevice) の判定述語
-- TrustedIdentity に `capability_proven` / `challenged_at` / `successful_jobs` / `failed_jobs` を追加
+旧実装は FIFO eviction: 100,001 件目の nullifier 記録時に最古が集合から除去された。
+攻撃者は 100,000 件の異なるトランザクションで window を埋め、evicted nullifier を再提示し
+二重使用を成立させられた (sliding window double-spend attack)。
 
-**信頼昇格 (Trust Ladder):**
-```
-Unknown (TOFU) → [challenge issued] → Proven (output hash match) or Failed
-Proven → [resolver checks] → Familiar (1+ successful jobs)
-Familiar → [user explicit] → Trusted
-```
+修正: eviction を廃止。容量到達時は `record` が `false` を返し `overflow=true` フラグを立てる。
+`spend_proofs` は `false` を受け取るとトランザクションを中断 (`anyhow::bail!`)。
+古い nullifier は集合に残り続け、二重使用検出は degradation しない。
 
-resolver はこれを後続で ピア選択の入力に利用可。トークン不要の Sybil 耐性確立。
+**問⑫「`rfind("==")` は何を返すか？」**
 
-**ソクラテス式深掘りでの修正 (問④⑤):** 初版コーパスの固定答えは compute コストゼロ・
-全 ID 共有可能で、"compute-anchored" の核心を満たしていなかった。per-identity proof-of-work
-`blake3^difficulty(nonce ‖ peer_pubkey)` を導入し、事前計算・ID 間共有・無コストの 3 つを同時に
-封じた。`issue_pow_challenge` / `compute_pow_answer` + 回帰テスト 7 件。
+条件文字列 `"label==value1==value2"` に対し `rfind("==")` は最後の `==` (index 14) を返し、
+expected = `"value2"` (末尾のみ) となる。正しくは `"value1==value2"` (最初の `==` 以降全体)。
+hex-encoded blake3 ハッシュは `=` を含まないため実害は少ないが、
+expected 値自体に `==` が混入した場合 (base64 等) は誤判定を招く。
 
-テスト 203/209、 clippy・fmt 全クリーン。
+修正: `rfind` → `find` (最初の `==` をセパレータとし、右辺全体を expected とみなす)。
+
+**問⑬「streaming の elapsed_sec は誰が保証するか？」**
+
+`tick_stream` は `Utc::now()` (呼び出し元のローカルクロック) で elapsed を計測する。
+tick 呼び出しを怠ると次回 tick 時に巨大な elapsed が発生し、1 回で大量の sats を消費する
+(例: 5 分放置 + rate=10 sat/sec → 3,000 sat を 1 tick で消費)。
+`remaining` で総額上限は守られるが、細粒度の決済制御が崩れる。
+
+修正: `EcashConfig::max_tick_interval_seconds` (既定 60 秒) を追加し、
+`elapsed_sec = raw_elapsed.min(max_tick_interval_seconds)` で 1 tick の最大消費を制限。
+
+**テスト追加 (+3 件):**
+- `test_spent_nullifiers_overflow_rejects_not_evicts` (旧 FIFO test を置換)
+- `test_spend_proofs_bails_on_nullifier_overflow`
+- `test_proof_satisfies_multi_eq_uses_first_separator`
+- `test_tick_stream_elapsed_capped_by_max_interval`
+
+テスト 208 (default) / clippy・fmt 全クリーン。
 
 ## 次の一手 (推奨順)
 
