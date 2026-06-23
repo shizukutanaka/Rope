@@ -354,8 +354,10 @@ impl PairingToken {
 pub struct CapabilityChallenge {
     /// チャレンジ一意識別子
     pub challenge_id: String,
-    /// 対象ピア ID
+    /// 対象ピア ID (UUID — discovery 由来)
     pub peer_id: String,
+    /// 対象ピア公開鍵 (trust_store のキー — 問⑥への応答)
+    pub peer_pubkey: String,
     /// チャレンジ内容 (例: "run llama-3.2-1b with seed=42")
     pub task_spec: String,
     /// 期待される出力ハッシュ (blake3)
@@ -935,9 +937,11 @@ impl PairManager {
     ///
     /// liveness 専用 (difficulty=0)。コーパス由来の固定答えを使う場合に呼ぶ。
     /// compute-anchored な Sybil 耐性が必要なら `issue_pow_challenge` を使う。
+    /// `peer_pubkey` は trust_store のキーと一致する必要がある (問⑥への修正)。
     pub fn issue_capability_challenge(
         &mut self,
         peer_id: &str,
+        peer_pubkey: &str,
         task_spec: &str,
         expected_output_hash: &str,
         timeout_seconds: u32,
@@ -946,6 +950,7 @@ impl PairManager {
         let challenge = CapabilityChallenge {
             challenge_id: challenge_id.clone(),
             peer_id: peer_id.to_string(),
+            peer_pubkey: peer_pubkey.to_string(),
             task_spec: task_spec.to_string(),
             expected_output_hash: expected_output_hash.to_string(),
             nonce: String::new(),
@@ -982,6 +987,7 @@ impl PairManager {
         let challenge = CapabilityChallenge {
             challenge_id: challenge_id.clone(),
             peer_id: peer_id.to_string(),
+            peer_pubkey: peer_pubkey.to_string(),
             task_spec: format!("pow:rope:v1:difficulty={difficulty}"),
             expected_output_hash: expected,
             nonce,
@@ -1025,16 +1031,16 @@ impl PairManager {
             ChallengeState::Failed
         };
 
+        // 問⑥の修正: peer_id (UUID) ではなく peer_pubkey (trust_store のキー) で引く
+        let peer_pubkey = challenge.peer_pubkey.clone();
         if verified {
-            if let Some(identity) = self.trust_store.get_mut(&challenge.peer_id) {
+            if let Some(identity) = self.trust_store.get_mut(&peer_pubkey) {
                 identity.capability_proven = true;
                 identity.challenged_at = Some(Utc::now());
                 identity.successful_jobs = identity.successful_jobs.saturating_add(1);
             }
-        } else {
-            if let Some(identity) = self.trust_store.get_mut(&challenge.peer_id) {
-                identity.failed_jobs = identity.failed_jobs.saturating_add(1);
-            }
+        } else if let Some(identity) = self.trust_store.get_mut(&peer_pubkey) {
+            identity.failed_jobs = identity.failed_jobs.saturating_add(1);
         }
 
         self.updated_at = Utc::now();
@@ -1113,6 +1119,16 @@ impl PairManager {
         let cutoff = Utc::now() - chrono::Duration::seconds(stale_seconds);
         self.discovered.retain(|p| p.last_seen > cutoff);
         self.stats.currently_discovered = self.discovered.len() as u32;
+    }
+
+    /// 完了チャレンジを解放 (問⑦への応答: 蓄積防止)
+    ///
+    /// Pending でないエントリ (Verified / Failed / TimedOut) を一括削除する。
+    /// 定期的に呼び出すことで pending_challenges の無限増長を防ぐ。
+    pub fn prune_completed_challenges(&mut self) {
+        self.pending_challenges
+            .retain(|_, c| c.state == ChallengeState::Pending);
+        self.updated_at = Utc::now();
     }
 
     /// 能力でピア推薦 (rope run が使う)
@@ -1853,9 +1869,10 @@ mod tests {
             },
         );
 
-        // Issue challenge
+        // Issue challenge (peer_id は "peer-uuid", peer_pubkey は別 — 問⑥の修正を検証)
         let challenge = m
             .issue_capability_challenge(
+                "peer-uuid",
                 peer_pubkey,
                 "run llama-3.2-1b with seed=42",
                 "expected-hash-deadbeef",
@@ -1864,6 +1881,10 @@ mod tests {
             .unwrap();
         assert_eq!(challenge.state, ChallengeState::Pending);
         assert!(challenge.is_pending());
+        assert_eq!(
+            challenge.peer_pubkey, peer_pubkey,
+            "pubkey がチャレンジに格納される"
+        );
 
         // Verify with wrong output → Failed
         let result = m
@@ -1879,6 +1900,7 @@ mod tests {
         // Issue new challenge
         let challenge2 = m
             .issue_capability_challenge(
+                "peer-uuid",
                 peer_pubkey,
                 "run llama-3.2-1b with seed=42",
                 "expected-hash-deadbeef",
@@ -2250,15 +2272,23 @@ mod tests {
             .unwrap();
         assert_eq!(challenge.difficulty, 1000);
         assert!(!challenge.nonce.is_empty(), "PoW チャレンジは nonce を持つ");
+        assert_eq!(
+            challenge.peer_pubkey, peer_pubkey,
+            "問⑥: pubkey がチャレンジに保存される"
+        );
 
         // 正直なピアは同じ計算をして答えを出す
         let honest_answer = compute_pow_answer(&challenge.nonce, peer_pubkey, 1000);
-        // peer_id ではなく peer_pubkey が信頼ストアのキーなので、検証成功には
-        // peer_id == peer_pubkey である必要がある。ここでは検証ロジックのみ確認。
         let result = m
             .verify_capability_proof(&challenge.challenge_id, &honest_answer)
             .unwrap();
         assert!(result, "正しい PoW 答えは検証を通る");
+
+        // 問⑥ の修正検証: trust_store が peer_pubkey で更新されている
+        assert!(
+            m.trust_store[peer_pubkey].capability_proven,
+            "問⑥修正後: peer_pubkey で trust_store が更新される (修正前は silent failure)"
+        );
     }
 
     #[test]
@@ -2281,5 +2311,56 @@ mod tests {
         let mut m = PairManager::default();
         let result = m.issue_pow_challenge("peer-1", "", 500, 30);
         assert!(result.is_err(), "空 pubkey は拒否");
+    }
+
+    // ======================================================================
+    // ソクラテス問答⑦: 完了チャレンジは解放されるか
+    // ======================================================================
+
+    #[test]
+    fn test_prune_completed_challenges_removes_finished() {
+        let mut m = PairManager::default();
+
+        // 3 チャレンジ発行
+        let c1 = m
+            .issue_pow_challenge("p1", "pk1", 0, 30)
+            .unwrap()
+            .challenge_id;
+        let c2 = m
+            .issue_pow_challenge("p2", "pk2", 0, 30)
+            .unwrap()
+            .challenge_id;
+        let c3 = m
+            .issue_pow_challenge("p3", "pk3", 0, 30)
+            .unwrap()
+            .challenge_id;
+
+        assert_eq!(m.pending_challenges.len(), 3);
+
+        // c1 を正解で完了
+        let ans1 = compute_pow_answer(&m.pending_challenges[&c1].nonce.clone(), "pk1", 0);
+        m.verify_capability_proof(&c1, &ans1).unwrap();
+
+        // c2 を不正解で失敗
+        m.verify_capability_proof(&c2, "wrong").unwrap();
+
+        // c3 は Pending のまま
+        assert_eq!(m.pending_challenges.len(), 3, "prune 前は全件残る");
+
+        m.prune_completed_challenges();
+
+        assert_eq!(m.pending_challenges.len(), 1, "Pending の c3 だけ残る");
+        assert!(
+            m.pending_challenges.contains_key(&c3),
+            "残るのは Pending の c3"
+        );
+        assert!(
+            !m.pending_challenges.contains_key(&c1),
+            "Verified の c1 は除去"
+        );
+        assert!(
+            !m.pending_challenges.contains_key(&c2),
+            "Failed の c2 は除去"
+        );
     }
 }
