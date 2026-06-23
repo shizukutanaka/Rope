@@ -3,7 +3,9 @@
 //! セッションのライフサイクル、状態管理、強制停止を担当
 
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::{DateTime, Utc};
+use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -100,6 +102,83 @@ pub struct Capability {
     pub nonce: String,
     /// 署名（Base64）
     pub signature: String,
+}
+
+impl Capability {
+    /// 署名対象の正規バイト列。`signature` 以外の全フィールドを固定順の
+    /// JSON 配列で直列化する。配列は順序保証 + 文字列エスケープがあるため、
+    /// id / nonce に区切り文字が混入してもフィールド境界が曖昧にならない。
+    fn signing_payload(&self) -> Vec<u8> {
+        let parts = (
+            "rope-cap:v1",
+            &self.id,
+            self.gpu,
+            self.vram_mb,
+            self.max_runtime_minutes,
+            self.expires,
+            &self.nonce,
+        );
+        // 固定構造のタプルなので直列化は失敗しない。万一失敗しても空 → 検証で確実に弾く。
+        serde_json::to_vec(&parts).unwrap_or_default()
+    }
+
+    /// 発行者（プロバイダ）側: capability に署名して `signature` を埋める。
+    pub fn sign(&mut self, issuer_key: &ed25519_dalek::SigningKey) {
+        let sig = issuer_key.sign(&self.signing_payload());
+        self.signature = BASE64.encode(sig.to_bytes());
+    }
+
+    /// 署名検証: capability が指定 issuer の署名を持つことを確認する。
+    /// `verify_strict` で非正規・小位数点の署名を拒否する。
+    pub fn verify_signature(&self, issuer: &VerifyingKey) -> Result<()> {
+        let sig_bytes = BASE64
+            .decode(self.signature.trim())
+            .context("capability 署名デコード失敗")?;
+        let sig_arr: [u8; 64] = sig_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("capability 署名長不正 (64 バイト期待)"))?;
+        let sig = Signature::from_bytes(&sig_arr);
+        issuer
+            .verify_strict(&self.signing_payload(), &sig)
+            .map_err(|_| anyhow::anyhow!("capability 署名不一致 (改ざん or 別発行者)"))
+    }
+
+    /// 失効しているか（`now_unix` は Unix 秒）。expires 丁度も失効扱い。
+    pub fn is_expired(&self, now_unix: i64) -> bool {
+        self.expires <= now_unix
+    }
+
+    /// この capability が要求された制限を許可するか。
+    /// capability はプロバイダからの権限付与なので、セッションの要求 limits は
+    /// capability の上限以内でなければならない。
+    pub fn authorizes(&self, limits: &Limits) -> bool {
+        limits.max_vram <= self.vram_mb && limits.max_time_minutes <= self.max_runtime_minutes
+    }
+
+    /// 結合ゲート: 署名 OK ∧ 未失効 ∧ 制限が上限内。
+    /// セッション開始前にこれを通す。要件 vs 証明の原則: ピアの自己申告ではなく、
+    /// 発行者署名で裏付けられた権限のみを受理する。
+    pub fn validate(&self, issuer: &VerifyingKey, limits: &Limits, now_unix: i64) -> Result<()> {
+        self.verify_signature(issuer)?;
+        if self.is_expired(now_unix) {
+            anyhow::bail!(
+                "capability 失効済み (expires={}, now={})",
+                self.expires,
+                now_unix
+            );
+        }
+        if !self.authorizes(limits) {
+            anyhow::bail!(
+                "capability が要求制限を許可しない (cap: {}MB/{}分, 要求: {}MB/{}分)",
+                self.vram_mb,
+                self.max_runtime_minutes,
+                limits.max_vram,
+                limits.max_time_minutes
+            );
+        }
+        Ok(())
+    }
 }
 
 /// セッション情報
@@ -258,30 +337,44 @@ impl SessionManager {
     }
 }
 
-/// 緊急停止
+/// 緊急停止（フェイルセーフ）
+///
+/// 安全性最優先のため **best-effort** で進む。docker が無い/失敗しても全体を
+/// 諦めず、停止フラグの設定とセッションファイルの掃除まで必ず到達する。
+/// 旧実装は `docker ps` の失敗で `?` 早期 return し、コンテナ kill もファイル掃除も
+/// せず終わっていた（緊急停止が最も脆い経路だった）。
+///
+/// また `cleanup()` は呼ばない。cleanup は最後に停止フラグをリセットするため、
+/// 緊急停止のシグナルを即座に打ち消してしまう。ここではフラグを立てたまま残し、
+/// ポーリング中のループ（監視/デモ）が確実に停止を観測できるようにする。
 pub fn panic_stop() -> Result<()> {
     tracing::warn!("PANIC STOP triggered");
+    // 真っ先に停止フラグ。後続が失敗してもポーリング側は止まれる。
     STOP_REQUESTED.store(true, Ordering::SeqCst);
 
-    // 全コンテナを停止
-    let output = std::process::Command::new("docker")
+    // コンテナ停止は best-effort: docker 不在/失敗で緊急停止全体を諦めない。
+    match std::process::Command::new("docker")
         .args(["ps", "-q", "--filter", "name=rope-"])
         .output()
-        .context("コンテナ一覧取得失敗")?;
-
-    let container_ids = String::from_utf8_lossy(&output.stdout);
-    for id in container_ids.lines() {
-        if !id.is_empty() {
-            tracing::info!("Killing container: {}", id);
-            std::process::Command::new("docker")
-                .args(["kill", id])
-                .output()
-                .ok();
+    {
+        Ok(output) => {
+            for id in String::from_utf8_lossy(&output.stdout).lines() {
+                if !id.is_empty() {
+                    tracing::info!("Killing container: {}", id);
+                    std::process::Command::new("docker")
+                        .args(["kill", id])
+                        .output()
+                        .ok();
+                }
+            }
         }
+        Err(e) => tracing::warn!("docker ps 失敗、コンテナ停止をスキップ: {}", e),
     }
 
-    // セッションファイルをクリア
-    cleanup()?;
+    // セッションファイルを掃除（best-effort）。失敗しても停止フラグは維持。
+    if let Err(e) = clear_session_files() {
+        tracing::warn!("セッションファイル削除失敗: {}", e);
+    }
 
     Ok(())
 }
@@ -375,20 +468,25 @@ pub fn prune_stale() -> Result<usize> {
     Ok(pruned)
 }
 
-/// クリーンアップ
-pub fn cleanup() -> Result<()> {
+/// セッションファイル (*.json) を全削除する。停止フラグには触れない。
+/// `cleanup`（通常終了）と `panic_stop`（緊急停止）で共有する純掃除処理。
+fn clear_session_files() -> Result<()> {
     let session_dir = config::session_dir();
-
-    // セッションファイルを削除
     if session_dir.exists() {
         for entry in fs::read_dir(&session_dir)? {
-            let entry = entry?;
-            let path = entry.path();
+            let path = entry?.path();
             if path.extension().map(|e| e == "json").unwrap_or(false) {
                 fs::remove_file(path)?;
             }
         }
     }
+    Ok(())
+}
+
+/// クリーンアップ
+pub fn cleanup() -> Result<()> {
+    // セッションファイルを削除
+    clear_session_files()?;
 
     // 残存コンテナを削除 (docker 不在は silent ignore)
     if let Ok(output) = std::process::Command::new("docker")
@@ -659,5 +757,106 @@ mod tests {
         running.transition(SessionState::Verifying).unwrap();
         running.transition(SessionState::Running).unwrap();
         assert!(matches!(running.state, SessionState::Running));
+    }
+
+    // ====== Round 6 (Socratic 問⑮): Capability 検証ゲート ======
+
+    /// 決定的鍵で署名済みの test capability を作る (8192MB / 60 分)。
+    fn signed_capability(expires: i64) -> (Capability, ed25519_dalek::SigningKey) {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let mut cap = Capability {
+            id: "cap-1".into(),
+            gpu: 0,
+            vram_mb: 8192,
+            max_runtime_minutes: 60,
+            expires,
+            nonce: "nonce-abc".into(),
+            signature: String::new(),
+        };
+        cap.sign(&key);
+        (cap, key)
+    }
+
+    #[test]
+    fn test_capability_signature_roundtrip() {
+        let (cap, key) = signed_capability(Utc::now().timestamp() + 3600);
+        assert!(cap.verify_signature(&key.verifying_key()).is_ok());
+    }
+
+    #[test]
+    fn test_capability_rejects_wrong_issuer() {
+        let (cap, _) = signed_capability(Utc::now().timestamp() + 3600);
+        let other = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
+        assert!(cap.verify_signature(&other.verifying_key()).is_err());
+    }
+
+    #[test]
+    fn test_capability_rejects_tampered_fields() {
+        let (mut cap, key) = signed_capability(Utc::now().timestamp() + 3600);
+        // 署名後に vram を引き上げる → payload が変わり署名と不一致になる
+        cap.vram_mb = 80_000;
+        assert!(
+            cap.verify_signature(&key.verifying_key()).is_err(),
+            "署名後のフィールド改ざんは検出される"
+        );
+    }
+
+    #[test]
+    fn test_capability_rejects_malformed_signature() {
+        let (mut cap, key) = signed_capability(Utc::now().timestamp() + 3600);
+        cap.signature = "not-base64-!!".into();
+        assert!(cap.verify_signature(&key.verifying_key()).is_err());
+        cap.signature = BASE64.encode([0u8; 10]); // 長さ不正 (64 バイトでない)
+        assert!(cap.verify_signature(&key.verifying_key()).is_err());
+    }
+
+    #[test]
+    fn test_capability_expiry_boundary() {
+        let now = Utc::now().timestamp();
+        let (expired, _) = signed_capability(now - 1);
+        assert!(expired.is_expired(now));
+        let (exact, _) = signed_capability(now);
+        assert!(exact.is_expired(now), "expires 丁度も失効扱い");
+        let (live, _) = signed_capability(now + 3600);
+        assert!(!live.is_expired(now));
+    }
+
+    #[test]
+    fn test_capability_authorizes_within_bounds() {
+        let (cap, _) = signed_capability(Utc::now().timestamp() + 3600); // 8192MB / 60 分
+        let mk = |minutes: u32, vram: u32| Limits {
+            max_time_minutes: minutes,
+            max_vram: vram,
+            max_gpu_util: 80,
+        };
+        assert!(cap.authorizes(&mk(30, 4096)));
+        assert!(!cap.authorizes(&mk(30, 16384)), "VRAM 超過は拒否");
+        assert!(!cap.authorizes(&mk(120, 4096)), "実行時間超過は拒否");
+    }
+
+    #[test]
+    fn test_capability_validate_combined_gate() {
+        let now = Utc::now().timestamp();
+        let (cap, key) = signed_capability(now + 3600);
+        let vk = key.verifying_key();
+        let ok = Limits {
+            max_time_minutes: 30,
+            max_vram: 4096,
+            max_gpu_util: 80,
+        };
+        // 全条件成立 → OK
+        assert!(cap.validate(&vk, &ok, now).is_ok());
+        // 失効 → NG
+        assert!(cap.validate(&vk, &ok, now + 7200).is_err());
+        // 別 issuer → NG
+        let other = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]).verifying_key();
+        assert!(cap.validate(&other, &ok, now).is_err());
+        // 制限超過 → NG
+        let over = Limits {
+            max_time_minutes: 999,
+            max_vram: 4096,
+            max_gpu_util: 80,
+        };
+        assert!(cap.validate(&vk, &over, now).is_err());
     }
 }

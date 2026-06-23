@@ -11,7 +11,7 @@
 2. **状態機械が明快** — `ecash` / `pair` / `confidential` / `intent` が型と状態遷移で
    表現され、純ロジックとして単体テスト可能。I/O と分離されている。
 3. **品質ゲートが厳格** — `clippy -D warnings` / `fmt --check` / `unsafe_code = deny` を
-   CI 級に強制。テスト 208 (default) / 214 (http)、全 4 動詞 graceful exit。
+   CI 級に強制。テスト 215 (default) / 221 (http)、全 4 動詞 graceful exit。
 4. **依存最小主義** — HTTP は opt-in feature、edition2024 を避けた上限固定で
    ビルド再現性を確保。
 5. **正直なフォールバック設計** — TEE 非対応や検証なしを「できるフリ」せず、
@@ -41,7 +41,8 @@
 | `EnergyPreference` を resolver に配線 (#13-2) | ✅ 改良済 | `6bfb6da` |
 | escrow 解放に検証ゲート (#1×#5, free-riding 防止) | ✅ 改良済 | `af421e9` |
 | **Sybil 耐性 (proof-of-capability + 評判スコア)** | ✅ 改良済 | `a84d162` |
-| **ecash 3 欠陥 (問⑪⑫⑬)** | ✅ **本コミット** | (this) |
+| **ecash 3 欠陥 (問⑪⑫⑬)** | ✅ 改良済 | `741f99d` |
+| **session 安全/権限プリミティブ硬化 (問⑭⑮)** | ✅ **本コミット** | (this) |
 | NAT 越え (libp2p DCUtR) / Noise 実結線 | ⏳ 大 | — |
 | 検証本体 (VeriLLM 風 再実行 / TOPLOC LSH) | ⏳ 大 | — |
 | 永続化 (ecash 状態の WAL/crash recovery) | ⏳ 中 | — |
@@ -85,6 +86,40 @@ tick 呼び出しを怠ると次回 tick 時に巨大な elapsed が発生し、
 - `test_tick_stream_elapsed_capped_by_max_interval`
 
 テスト 208 (default) / clippy・fmt 全クリーン。
+
+### ソクラテス式問答 Round 6 — session.rs の「完成して見える」安全プリミティブ
+
+着眼: `session.rs` には**定義だけで未結線**の primitive が 2 つあり、どちらも
+「見た目は完成」だが結線した瞬間に効く潜在バグを抱えていた（要件 vs 証明 / フェイルセーフ）。
+
+**問⑭「`panic_stop` は docker が無いとき何をするか？」**
+
+緊急停止は安全最優先の経路なのに、旧実装は `docker ps` の失敗で `?` 早期 return し、
+コンテナ kill もセッション掃除もせず終わっていた（**最も脆い経路が最も重要だった**）。
+さらに末尾で `cleanup()` を呼び、その中の `reset_stop_flag()` が緊急停止フラグを
+即座にリセット → ポーリング中の監視ループが停止シグナルを取りこぼす。
+
+修正:
+- docker 段を best-effort 化（`?` 廃止、失敗は warn して続行）し、必ず掃除まで到達。
+- `cleanup()` を呼ばず `clear_session_files()`（停止フラグに触れない純掃除）を新設して共有。
+  フラグは立てたまま残し、緊急停止が確実に観測される。
+
+**問⑮「`Capability` トークンは誰が検証するか？」**
+
+`Capability`（gpu / vram / runtime / expires / nonce / signature の権限制御トークン）は
+構造体として完備だが**検証関数が一切なく、どこからも validate されない死んだ primitive**だった。
+結線すれば「ピアが自己申告した任意の権限」「失効済みトークン」が無検査で通る。
+
+修正（ed25519、依存追加なし）:
+- `sign()` — 発行者署名（payload は signature 以外の全フィールドを順序保証 JSON 配列で正規化）
+- `verify_signature()` — `verify_strict` で改ざん・別発行者・非正規署名を拒否
+- `is_expired()` / `authorizes()` — 失効判定と「要求 ≤ 付与上限」の境界チェック
+- `validate()` — 署名 ∧ 未失効 ∧ 上限内の結合ゲート（セッション開始前に通す想定）
+
+**テスト追加 (+7 件):** capability 署名 roundtrip / 別 issuer 拒否 / 改ざん検出 /
+不正署名形式 / 失効境界 / 上限境界 / 結合ゲート。すべて決定的鍵で hermetic（FS/docker 不使用）。
+
+テスト 215 (default) / clippy・fmt 全クリーン。
 
 ## 次の一手 (推奨順)
 
