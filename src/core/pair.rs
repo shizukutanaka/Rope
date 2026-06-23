@@ -32,6 +32,8 @@ pub struct PairManager {
     pub config: PairConfig,
     /// 統計
     pub stats: PairStats,
+    /// 進行中の能力証明チャレンジ
+    pub pending_challenges: HashMap<String, CapabilityChallenge>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -44,6 +46,7 @@ impl Default for PairManager {
             trust_store: HashMap::new(),
             config: PairConfig::default(),
             stats: PairStats::default(),
+            pending_challenges: HashMap::new(),
             updated_at: Utc::now(),
         }
     }
@@ -137,6 +140,13 @@ pub struct TrustedIdentity {
     pub trust_level: TrustLevel,
     /// ユーザーメモ (この人信頼する理由)
     pub note: Option<String>,
+    /// 能力証明状態
+    pub capability_proven: bool,
+    /// 最後に能力証明を試みた時刻
+    pub challenged_at: Option<DateTime<Utc>>,
+    /// 成功したジョブ数 / 試みたジョブ数 (評判スコア用)
+    pub successful_jobs: u32,
+    pub failed_jobs: u32,
 }
 
 /// Noise XX 握手セッション
@@ -333,6 +343,53 @@ impl PairingToken {
     /// 期限切れか
     pub fn is_expired(&self) -> bool {
         self.payload.expires_at < Utc::now()
+    }
+}
+
+/// 能力証明チャレンジ（FORTYTWO 式の Proof-of-Capability）
+///
+/// 初回ピアに対して、実際に計算タスクをこなせるか確認する仕組み。
+/// リプレイ攻撃を防ぐため nonce + タイムスタンプで一意性を確保。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityChallenge {
+    /// チャレンジ一意識別子
+    pub challenge_id: String,
+    /// 対象ピア ID
+    pub peer_id: String,
+    /// チャレンジ内容 (例: "run llama-3.2-1b with seed=42")
+    pub task_spec: String,
+    /// 期待される出力ハッシュ (blake3)
+    pub expected_output_hash: String,
+    /// チャレンジ発行時刻
+    pub issued_at: DateTime<Utc>,
+    /// タイムアウト（秒）
+    pub timeout_seconds: u32,
+    /// 検証状態
+    pub state: ChallengeState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChallengeState {
+    /// チャレンジ発行済、応答待ち
+    Pending,
+    /// 正答者が応答してきた
+    Verified,
+    /// タイムアウト
+    TimedOut,
+    /// 不正答
+    Failed,
+}
+
+impl CapabilityChallenge {
+    /// チャレンジの有効期限内か
+    pub fn is_valid(&self) -> bool {
+        let elapsed = (Utc::now() - self.issued_at).num_seconds() as u32;
+        elapsed < self.timeout_seconds
+    }
+
+    /// チャレンジが応答を待ってるか
+    pub fn is_pending(&self) -> bool {
+        self.state == ChallengeState::Pending && self.is_valid()
     }
 }
 
@@ -679,6 +736,10 @@ impl PairManager {
                 pair_count: 1,
                 trust_level: TrustLevel::Unknown,
                 note: None,
+                capability_proven: false,
+                challenged_at: None,
+                successful_jobs: 0,
+                failed_jobs: 0,
             };
             self.trust_store.insert(verified_pubkey.to_string(), ident);
             self.stats.tofu_accepts += 1;
@@ -759,6 +820,105 @@ impl PairManager {
         }
         self.updated_at = Utc::now();
         Ok(())
+    }
+
+    // ========================================================================
+    // 能力証明 (Proof-of-Capability, FORTYTWO 式 Sybil 耐性)
+    // ========================================================================
+
+    /// 初回ピアに能力証明チャレンジを発行 (Sybil 攻撃防止)
+    pub fn issue_capability_challenge(
+        &mut self,
+        peer_id: &str,
+        task_spec: &str,
+        expected_output_hash: &str,
+        timeout_seconds: u32,
+    ) -> Result<CapabilityChallenge> {
+        let challenge_id = uuid::Uuid::now_v7().to_string();
+        let challenge = CapabilityChallenge {
+            challenge_id: challenge_id.clone(),
+            peer_id: peer_id.to_string(),
+            task_spec: task_spec.to_string(),
+            expected_output_hash: expected_output_hash.to_string(),
+            issued_at: Utc::now(),
+            timeout_seconds,
+            state: ChallengeState::Pending,
+        };
+
+        self.pending_challenges
+            .insert(challenge_id, challenge.clone());
+        self.updated_at = Utc::now();
+        Ok(challenge)
+    }
+
+    /// チャレンジ応答を検証 (ピアが正しい出力をハッシュで提示)
+    pub fn verify_capability_proof(
+        &mut self,
+        challenge_id: &str,
+        proof_output_hash: &str,
+    ) -> Result<bool> {
+        let challenge = self
+            .pending_challenges
+            .get_mut(challenge_id)
+            .context("チャレンジ無し")?;
+
+        if challenge.state != ChallengeState::Pending {
+            anyhow::bail!("チャレンジは既に完了");
+        }
+
+        if !challenge.is_valid() {
+            challenge.state = ChallengeState::TimedOut;
+            self.updated_at = Utc::now();
+            anyhow::bail!("チャレンジタイムアウト");
+        }
+
+        let verified = challenge.expected_output_hash == proof_output_hash;
+        challenge.state = if verified {
+            ChallengeState::Verified
+        } else {
+            ChallengeState::Failed
+        };
+
+        if verified {
+            if let Some(identity) = self.trust_store.get_mut(&challenge.peer_id) {
+                identity.capability_proven = true;
+                identity.challenged_at = Some(Utc::now());
+                identity.successful_jobs = identity.successful_jobs.saturating_add(1);
+            }
+        } else {
+            if let Some(identity) = self.trust_store.get_mut(&challenge.peer_id) {
+                identity.failed_jobs = identity.failed_jobs.saturating_add(1);
+            }
+        }
+
+        self.updated_at = Utc::now();
+        Ok(verified)
+    }
+
+    /// ピアの評判スコア (成功/全試行)
+    pub fn reputation_score(&self, pubkey: &str) -> Option<f64> {
+        self.trust_store.get(pubkey).map(|identity| {
+            let total = (identity.successful_jobs + identity.failed_jobs) as f64;
+            if total == 0.0 {
+                0.0
+            } else {
+                identity.successful_jobs as f64 / total
+            }
+        })
+    }
+
+    /// ピアが能力証明済みか、または信頼されているか
+    pub fn is_capability_proven_or_trusted(&self, pubkey: &str) -> bool {
+        self.trust_store
+            .get(pubkey)
+            .map(|identity| {
+                identity.capability_proven
+                    || matches!(
+                        identity.trust_level,
+                        TrustLevel::Familiar | TrustLevel::Trusted | TrustLevel::OwnDevice
+                    )
+            })
+            .unwrap_or(false)
     }
 
     /// 古い発見エントリを掃除 (デフォルト: 60秒以上見てない)
@@ -927,6 +1087,10 @@ mod tests {
                 pair_count: 5,
                 trust_level: TrustLevel::Familiar,
                 note: None,
+                capability_proven: false,
+                challenged_at: None,
+                successful_jobs: 0,
+                failed_jobs: 0,
             },
         );
         let peer = m
@@ -1026,6 +1190,10 @@ mod tests {
                 pair_count: 1,
                 trust_level: TrustLevel::Unknown,
                 note: None,
+                capability_proven: false,
+                challenged_at: None,
+                successful_jobs: 0,
+                failed_jobs: 0,
             },
         );
         m.paired.push(PairedPeer {
@@ -1096,6 +1264,10 @@ mod tests {
                 pair_count: 1,
                 trust_level: TrustLevel::Unknown,
                 note: None,
+                capability_proven: false,
+                challenged_at: None,
+                successful_jobs: 0,
+                failed_jobs: 0,
             },
         );
         m.paired.push(PairedPeer {
@@ -1452,11 +1624,170 @@ mod tests {
                 pair_count: 1,
                 trust_level: TrustLevel::Trusted,
                 note: None,
+                capability_proven: false,
+                challenged_at: None,
+                successful_jobs: 0,
+                failed_jobs: 0,
             },
         );
         let json1 = serde_json::to_string(&m).unwrap();
         let back: PairManager = serde_json::from_str(&json1).unwrap();
         let json2 = serde_json::to_string(&back).unwrap();
         assert_eq!(json1, json2, "PairManager roundtrip");
+    }
+
+    #[test]
+    fn test_capability_challenge_issue_and_verify() {
+        let mut m = PairManager::default();
+        let peer_pubkey = "pk-peer";
+        m.trust_store.insert(
+            peer_pubkey.to_string(),
+            TrustedIdentity {
+                pubkey: peer_pubkey.to_string(),
+                display_name: "Test Peer".to_string(),
+                first_paired: Utc::now(),
+                last_paired: Utc::now(),
+                pair_count: 1,
+                trust_level: TrustLevel::Unknown,
+                note: None,
+                capability_proven: false,
+                challenged_at: None,
+                successful_jobs: 0,
+                failed_jobs: 0,
+            },
+        );
+
+        // Issue challenge
+        let challenge = m
+            .issue_capability_challenge(
+                peer_pubkey,
+                "run llama-3.2-1b with seed=42",
+                "expected-hash-deadbeef",
+                30,
+            )
+            .unwrap();
+        assert_eq!(challenge.state, ChallengeState::Pending);
+        assert!(challenge.is_pending());
+
+        // Verify with wrong output → Failed
+        let result = m
+            .verify_capability_proof(&challenge.challenge_id, "wrong-hash")
+            .unwrap();
+        assert!(!result);
+        assert_eq!(
+            m.pending_challenges[&challenge.challenge_id].state,
+            ChallengeState::Failed
+        );
+        assert_eq!(m.trust_store[peer_pubkey].failed_jobs, 1);
+
+        // Issue new challenge
+        let challenge2 = m
+            .issue_capability_challenge(
+                peer_pubkey,
+                "run llama-3.2-1b with seed=42",
+                "expected-hash-deadbeef",
+                30,
+            )
+            .unwrap();
+
+        // Verify with correct output → Verified
+        let result = m
+            .verify_capability_proof(&challenge2.challenge_id, "expected-hash-deadbeef")
+            .unwrap();
+        assert!(result);
+        assert_eq!(
+            m.pending_challenges[&challenge2.challenge_id].state,
+            ChallengeState::Verified
+        );
+        assert!(m.trust_store[peer_pubkey].capability_proven);
+        assert_eq!(m.trust_store[peer_pubkey].successful_jobs, 1);
+        assert!(m.trust_store[peer_pubkey].challenged_at.is_some());
+    }
+
+    #[test]
+    fn test_reputation_score_calculation() {
+        let mut m = PairManager::default();
+        let peer_pubkey = "pk-reputation-test";
+        m.trust_store.insert(
+            peer_pubkey.to_string(),
+            TrustedIdentity {
+                pubkey: peer_pubkey.to_string(),
+                display_name: "Test".to_string(),
+                first_paired: Utc::now(),
+                last_paired: Utc::now(),
+                pair_count: 1,
+                trust_level: TrustLevel::Unknown,
+                note: None,
+                capability_proven: false,
+                challenged_at: None,
+                successful_jobs: 7,
+                failed_jobs: 3,
+            },
+        );
+
+        let score = m.reputation_score(peer_pubkey).unwrap();
+        assert!((score - 0.7).abs() < 0.001, "7/10 = 0.7");
+    }
+
+    #[test]
+    fn test_is_capability_proven_or_trusted() {
+        let mut m = PairManager::default();
+
+        // Unknown peer, not proven
+        m.trust_store.insert(
+            "pk-unknown".to_string(),
+            TrustedIdentity {
+                pubkey: "pk-unknown".to_string(),
+                display_name: "Unknown".to_string(),
+                first_paired: Utc::now(),
+                last_paired: Utc::now(),
+                pair_count: 1,
+                trust_level: TrustLevel::Unknown,
+                note: None,
+                capability_proven: false,
+                challenged_at: None,
+                successful_jobs: 0,
+                failed_jobs: 0,
+            },
+        );
+        assert!(!m.is_capability_proven_or_trusted("pk-unknown"));
+
+        // Proven peer
+        m.trust_store.insert(
+            "pk-proven".to_string(),
+            TrustedIdentity {
+                pubkey: "pk-proven".to_string(),
+                display_name: "Proven".to_string(),
+                first_paired: Utc::now(),
+                last_paired: Utc::now(),
+                pair_count: 1,
+                trust_level: TrustLevel::Unknown,
+                note: None,
+                capability_proven: true,
+                challenged_at: Some(Utc::now()),
+                successful_jobs: 1,
+                failed_jobs: 0,
+            },
+        );
+        assert!(m.is_capability_proven_or_trusted("pk-proven"));
+
+        // Trusted peer
+        m.trust_store.insert(
+            "pk-trusted".to_string(),
+            TrustedIdentity {
+                pubkey: "pk-trusted".to_string(),
+                display_name: "Trusted".to_string(),
+                first_paired: Utc::now(),
+                last_paired: Utc::now(),
+                pair_count: 1,
+                trust_level: TrustLevel::Trusted,
+                note: None,
+                capability_proven: false,
+                challenged_at: None,
+                successful_jobs: 0,
+                failed_jobs: 0,
+            },
+        );
+        assert!(m.is_capability_proven_or_trusted("pk-trusted"));
     }
 }

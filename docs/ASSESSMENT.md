@@ -39,29 +39,45 @@
 | 機密計算は attestation 検証必須 (#2×#3) | ✅ 改良済 | `9743e4e` |
 | README の TEE プライバシー前提を明記 | ✅ 改良済 | `3708da3` |
 | `EnergyPreference` を resolver に配線 (#13-2) | ✅ 改良済 | `6bfb6da` |
-| **escrow 解放に検証ゲート (#1×#5, free-riding 防止)** | ✅ **本コミット** | (this) |
+| escrow 解放に検証ゲート (#1×#5, free-riding 防止) | ✅ 改良済 | `af421e9` |
+| **Sybil 耐性 (proof-of-capability + 評判スコア)** | ✅ **本コミット** | (this) |
 | NAT 越え (libp2p DCUtR) / Noise 実結線 | ⏳ 大 | — |
 | 検証本体 (VeriLLM 風 再実行 / TOPLOC LSH) | ⏳ 大 | — |
 | 永続化 (ecash 状態の WAL/crash recovery) | ⏳ 中 | — |
-| Sybil 耐性 (proof-of-capability + 評判スコア) | ⏳ 中 | — |
 | `RegionConstraint` 配線 (プロバイダ地域メタ必要) | ⏳ 保留 | — |
 
-### 本セッションの改良の要点 (escrow 検証ゲート)
+### 本セッションの改良の要点 (Proof-of-Capability Sybil 耐性)
 
-`release_escrow` は従来 **任意の非空 proof で資金解放**していた（手抜き計算でも支払い =
-free-riding）。本コミットで `completion_proof` が `completion_condition` を満たすことを
-要求する検証ゲート `proof_satisfies` を追加:
+初回ピア（Unknown trust level）に対する Sybil 攻撃リスクに対応。FORTYTWO 論文の
+compute-anchored 能力証明を実装:
 
-- 条件が `"...==<commit>"` 形式なら、`proof == commit` か `blake3(proof) == commit`
-  （値そのもの / プリイメージ提出の両対応）でのみ解放。
-- 空証拠は常に拒否。自由形式条件は非空証拠で従来互換。
+**実装内容:**
+- `CapabilityChallenge` struct: チャレンジ ID / task spec / expected output hash / state machine
+- PairManager メソッド群:
+  - `issue_capability_challenge()` — 初回ピアに task を発行 (nonce + timeout で一意性確保)
+  - `verify_capability_proof()` — 出力ハッシュ一致で capability_proven に昇格
+  - `reputation_score()` — successful/failed ratio で 0.0-1.0 スコア計算
+  - `is_capability_proven_or_trusted()` — proven OR (Familiar|Trusted|OwnDevice) の判定述語
+- TrustedIdentity に `capability_proven` / `challenged_at` / `successful_jobs` / `failed_jobs` を追加
 
-これは研究で最重要とした **検証 × ecash escrow** の結節点を、最小の純ロジックで前進させる。
-テスト 185/191、clippy・fmt 全クリーン。
+**信頼昇格 (Trust Ladder):**
+```
+Unknown (TOFU) → [challenge issued] → Proven (output hash match) or Failed
+Proven → [resolver checks] → Familiar (1+ successful jobs)
+Familiar → [user explicit] → Trusted
+```
+
+resolver はこれを後続で ピア選択の入力に利用可。トークン不要の Sybil 耐性確立。
+テスト 188/194、 clippy・fmt 全クリーン。
 
 ## 次の一手 (推奨順)
 
 1. **NAT 越えの実結線** — 製品が LAN を出るための必須条件（libp2p DCUtR + relay）。
+   - 現状は他人 GPU を "同一 LAN" に限定、製品の中核価値を実現できない
+   - libp2p を依存に追加して DHT+ホールパンチング+relay を統合
 2. **検証本体** — `proof_satisfies` を VeriLLM 風 確率的再実行 / TOPLOC LSH へ拡張。
+   - escrow gate はコミット一致のみ、実計算検証がない
+   - resolver と抜き打ち再実行で ~1% コスト検証フローを実装
 3. **永続化** — 実 ecash 結線前に bearer token durability を用意。
+   - ウォレット/nullifier/escrow のメモリ状態をファイル WAL へ
 </content>

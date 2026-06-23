@@ -260,6 +260,18 @@ CC 非対応）。一方プライバシー保証は CC 前提。**この 2 つ�
 
 **優先度: 高**（不特定多数から借りる製品の安全性の前提。#1 と基盤を共有）。
 
+#### 本セッションでの改良 (Proof-of-Capability)
+
+`pair.rs` に FORTYTWO 式 Sybil 耐性を導入:
+
+- **`CapabilityChallenge` struct**: チャレンジ ID / task spec / expected output hash / タイムアウト / state
+- **能力証明フロー**: 初回ピアに対し、既知出力を期待する task を発行 → 出力ハッシュで検証
+- **評判追跡**: `TrustedIdentity` に `capability_proven` / `successful_jobs` / `failed_jobs` を追加
+- **助力関数**: `issue_capability_challenge()` / `verify_capability_proof()` / `reputation_score()` / `is_capability_proven_or_trusted()`
+- **テスト**: 3 つの回帰テスト (challenge issue/verify, reputation score, proven-or-trusted predicate)
+
+言語仕様上、経済ステーク無しで未知ピアの能力を確認。resolver はこれを後続の選択に使える基盤を提供。
+
 ---
 
 ## 11. モデル配布 / コールドスタート（高） — 第2巡
