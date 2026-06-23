@@ -95,6 +95,10 @@ pub struct PeerCapabilities {
     /// BTC lightning address (オプション)
     pub payment_address: Option<String>,
     pub protocol_version: String,
+    /// TEE 対応を自己申告しているか (問⑨への応答: 自己申告のみ — 実証明は AttestationReport)
+    pub tee_capable: bool,
+    /// NVIDIA HCC attestation を通過したか (外部 NRAS 検証が必要、struct のみでは false)
+    pub tee_attested: bool,
 }
 
 /// 握手完了ピア
@@ -1092,13 +1096,17 @@ impl PairManager {
             .unwrap_or(false)
     }
 
-    // ======================================================================
-    // 問②への応答: 実ジョブ結果を評判に反映
-    // 「チャレンジ成功 ≠ ジョブ品質。escrow 解放後の結果が評判に戻らない」
-    // → resolver が呼び出し、3 回成功で Unknown→Familiar に昇格
-    // ======================================================================
-
-    /// 実ジョブ完了結果を信頼ストアに記録
+    /// ジョブ完了時の評判更新エントリポイント (問⑧への応答: 呼び出し側の接点を明示)
+    ///
+    /// 設計上の seam (接合点):
+    /// `record_job_outcome` は main.rs のオーケストレーター層が以下のタイミングで呼ぶ:
+    /// 1. escrow の `release_escrow` 成功後 → `success=true`
+    /// 2. escrow の deadman 期限切れ返金後 → `success=false`
+    /// 3. ジョブ途中切断後 → `success=false`
+    ///
+    /// I/O 未結線の現段階では呼び出し側は存在しないが、この seam を通してのみ
+    /// 評判が更新されることを型で保証する。`pair_pubkey` は `PairedPeer.verified_pubkey`
+    /// または `TrustedIdentity.pubkey` と一致する必要がある。
     pub fn record_job_outcome(&mut self, pubkey: &str, success: bool) {
         if let Some(identity) = self.trust_store.get_mut(pubkey) {
             if success {
@@ -1135,13 +1143,22 @@ impl PairManager {
     ///
     /// ソクラテス問答②の帰結: 評判スコアを信頼度と組み合わせて選別する。
     /// 信頼度 (TrustLevel) を第一キー、評判スコアを第二キーとして降順ソート。
-    pub fn recommend_for_job(&self, min_vram_gb: u32, needs_payment: bool) -> Vec<&PairedPeer> {
+    ///
+    /// 問⑨への応答: `requires_tee=true` のとき `tee_attested` が true のピアのみ選択。
+    /// `tee_capable` (自己申告) と `tee_attested` (外部検証済) を明示的に分離する。
+    pub fn recommend_for_job(
+        &self,
+        min_vram_gb: u32,
+        needs_payment: bool,
+        requires_tee: bool,
+    ) -> Vec<&PairedPeer> {
         let mut candidates: Vec<&PairedPeer> = self
             .paired
             .iter()
             .filter(|p| p.capabilities.vram_gb >= min_vram_gb)
             .filter(|p| p.capabilities.accepts_jobs)
             .filter(|p| !needs_payment || p.capabilities.accepts_payment)
+            .filter(|p| !requires_tee || p.capabilities.tee_attested)
             .collect();
 
         // 信頼度 → 評判スコア → 最新活動で並び替え
@@ -1229,6 +1246,8 @@ mod tests {
             accepts_payment: true,
             payment_address: Some("bc1q...".to_string()),
             protocol_version: "rope/1.0".to_string(),
+            tee_capable: false,
+            tee_attested: false,
         }
     }
 
@@ -1437,9 +1456,61 @@ mod tests {
             trust_level: TrustLevel::Trusted,
         });
 
-        let recs = m.recommend_for_job(24, true);
+        // requires_tee=false: no TEE filter
+        let recs = m.recommend_for_job(24, true, false);
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].id, "p2");
+    }
+
+    #[test]
+    fn test_recommend_for_job_tee_filter() {
+        let mut m = PairManager::default();
+
+        // TEE 自己申告のみのピア (attested ではない)
+        let mut caps_claimed = test_caps();
+        caps_claimed.tee_capable = true;
+        caps_claimed.tee_attested = false;
+
+        // TEE 実証明済みのピア
+        let mut caps_attested = test_caps();
+        caps_attested.tee_capable = true;
+        caps_attested.tee_attested = true;
+
+        m.paired.push(PairedPeer {
+            id: "p-claimed".to_string(),
+            display_name: "claimed".to_string(),
+            verified_pubkey: "pk-claimed".to_string(),
+            endpoint: test_endpoint(1),
+            session_key_hash: "h1".to_string(),
+            capabilities: caps_claimed,
+            paired_at: Utc::now(),
+            last_active: Utc::now(),
+            jobs_run: 0,
+            bytes_transferred: 0,
+            trust_level: TrustLevel::Unknown,
+        });
+        m.paired.push(PairedPeer {
+            id: "p-attested".to_string(),
+            display_name: "attested".to_string(),
+            verified_pubkey: "pk-attested".to_string(),
+            endpoint: test_endpoint(2),
+            session_key_hash: "h2".to_string(),
+            capabilities: caps_attested,
+            paired_at: Utc::now(),
+            last_active: Utc::now(),
+            jobs_run: 0,
+            bytes_transferred: 0,
+            trust_level: TrustLevel::Unknown,
+        });
+
+        // 問⑨: TEE 要求時は tee_attested のピアのみ
+        let tee_recs = m.recommend_for_job(24, false, true);
+        assert_eq!(tee_recs.len(), 1, "tee_attested のみ選ばれる");
+        assert_eq!(tee_recs[0].id, "p-attested");
+
+        // 非 TEE 要求時は両方
+        let all_recs = m.recommend_for_job(24, false, false);
+        assert_eq!(all_recs.len(), 2, "TEE フィルタ無しは両方");
     }
 
     #[test]

@@ -795,6 +795,8 @@ mod tests {
                 accepts_payment: true,
                 payment_address: None,
                 protocol_version: "rope/1.0".to_string(),
+                tee_capable: true,
+                tee_attested: false, // first_run demo: 未実証。実 NRAS 通過後に true
             },
             paired_at: Utc::now(),
             last_active: Utc::now(),
@@ -915,6 +917,8 @@ mod tests {
                 accepts_payment: true,
                 payment_address: None,
                 protocol_version: "rope/1.0".to_string(),
+                tee_capable: false, // RTX 4090 は CC 非対応 (Hopper/Blackwell 以外)
+                tee_attested: false,
             },
             paired_at: Utc::now(),
             last_active: Utc::now(),
