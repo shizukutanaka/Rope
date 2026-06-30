@@ -5,42 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.1] - 2026-06-05
+## [0.2.1] - 2026-06-30
 
 ### Fixed
-- **streaming 課金のオーバーフロー耐性**: `tick_stream` / `close_stream` の
-  `elapsed * rate` と残額計算を `saturating_mul` / `saturating_sub` 化。
-  クロックスキューや長時間放置でも panic せず remaining で頭打ち
-  (`src/core/ecash.rs`、同モジュール内の他箇所と一貫)
-- **intent history のパニック修正**: `complete()` の `drain(..100)` は
-  `max_history < 100` で範囲外 panic していた。超過分のみ drain するよう修正
-  (`src/core/intent.rs`、`submit` 側の既存実装と一貫)
-- **整数オーバーフロー防御**: `target_ms * 4` と `num_items * tokens` を
-  `saturating_mul` 化 (`src/core/intent.rs`)
-- **UTF-8 境界 panic 修正**: 表示用 ID 切り詰めの `&s[..n]` バイトスライスを
-  char ベースの共通ヘルパー `core::short` に統一 (intent / confidential /
-  session)。マルチバイト ID でも panic しない
-- **クロスプラットフォーム stale lock 検出**: `LockGuard` の生存判定は Linux
-  専用の `/proc/<pid>` のみで、非 Linux では全ロックを stale と誤判定して
-  相互排他を壊していた。非 Linux 向けに mtime ベースの保守的フォールバックを
-  追加 (`src/core/config.rs`)
+
+#### Round 5: ecash.rs の 3 欠陥
+- **SpentNullifiers sliding window double-spend 攻撃** (問⑪): FIFO eviction を廃止し
+  容量到達時に `overflow=true` で拒否。100k を埋めて evicted nullifier を再提示する攻撃を
+  防止。nullifier 履歴は完全に保持
+- **proof_satisfies の条件パース誤り** (問⑫): `rfind("==")` → `find("==")`。
+  `"label==value1==value2"` の条件が正しく `"value1==value2"` 全体を expected として処理
+- **tick_stream elapsed のローカルクロック悪用** (問⑬): `max_tick_interval_seconds` を
+  追加 (デフォルト 60 秒)。elapsed を capped して 5 分放置での 3,000 sat 一括消費を防止
+
+#### Round 6: session.rs の「完成して見える」安全プリミティブ硬化
+- **panic_stop の緊急停止信頼性** (問⑭): docker 失敗で早期 return → cleanup も呼ばない
+  バグを修正。best-effort 化して必ず `clear_session_files()` に到達。フラグも立てたまま残す
+- **Capability token の未検証** (問⑮): ed25519 署名検証を実装。`sign()` / `verify_signature()` /
+  `is_expired()` / `authorizes()` / `validate()` の 5-gate で完成。署名素材は JSON 配列正規化
+
+#### Round 7a: confidential.rs + intent.rs の「リモートを無検証で信頼」の欠陥
+- **attestation 新鮮度チェック遅延** (問⑯⑰): `create_secure_session()` で now - last_attestation ≤
+  attestation_interval_seconds を直接検証。refresh_expired_attestations() に依存しない
+- **replay 検出の固定 60 秒ウィンドウ** (問⑰): `attestation_interval_seconds` に連動。
+  slow-drip 攻撃 (13 秒ごとに小額実行) を防止、warning にも表示
+- **RenewableOnly/PreferRenewable がルーティングに未反映** (問⑱): `select_provider()` に
+  renewable branch 追加。OnDevicePreferred+Small は LocalDevice、renewable 要件は FederatedPeer に
+
+#### Round 7b: cashu_mint.rs + config.rs の実 I/O 経路の検証欠落
+- **mint 応答の額面・keyset 未検証** (問⑲): `translate_signatures_to_proofs()` に
+  `expected_amounts: &[u64]` を追加。位置ごとに `sig.amount == expected[i]` と
+  `sig.id == keyset_id` を検証。mint が 8→64 sat すり替え や別 keyset 署名を拒否
+- **stale lock 検出の liveness バグ** (問⑳): `try_reclaim_stale()` を毎試行で呼び出す。
+  PID を再読込して二重奪取レースを防ぎ、live lock は保護。dead holder は即座に奪取
 
 ### Security
 - **QR ペアリング MAC を blake3 keyed-hash に置換**: 非暗号学的な FNV を MAC
   として使っていたため payload 偽造を防げなかった。`blake3::keyed_hash`
   (正式な keyed MAC) へ置換、依存追加なし (blake3 は既存依存)
   (`src/core/pair.rs`)
-- **attestation evidence digest の強化**: FNV を blake3 に置換し、report ごとの
-  nonce を含めて再 attestation でも digest が変わるようにした (リプレイ識別性)。
-  実 TEE 署名検証は引き続き v0.3 で結線、`unverified-digest:` プレフィックス維持
-  (`src/core/confidential.rs`)
 
 ### Changed
-- clippy `--all-targets -- -D warnings` を完全クリーンに (manual_div_ceil /
-  map_or / doc list indentation の 4 警告を解消)
-- 回帰テスト 4 件追加 (streaming saturating, history drain panic, multibyte
-  display, attestation nonce 識別性) — 計 178 テスト
-- README / ステータスの数値を実測へ同期 (main.rs 行数、テスト数)
+- 回帰テスト **19 件追加** (SpentNullifiers overflow / rfind separator / tick capping /
+  panic_stop cleanup / Capability 署名/失効/限度 / attestation freshness / mint amount / lock liveness)
+  — テスト計 225 (default) / 231 (http feature)
+- clippy `--all-targets -- -D warnings` を完全クリーンに維持
+- `cargo fmt --all -- --check` パス
+- README の数値更新 (main.rs 574 行、core 7 モジュール、テスト数)
 
 ## [0.2.0] - 2026-04-18
 
