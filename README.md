@@ -99,8 +99,8 @@ rope earn             # 自分の GPU を貸し出す
 ```
 モジュール:  7 core + 1 net  (旧 122、-93%)
 main.rs:     574 行 (旧 11,594、-95%)
-総 Rust:     ~9,500 行 (旧 ~75,600、-87%)
-テスト:      178 (cargo test、CI green)
+総 Rust:     11,362 行 (旧 ~75,600、-85%)
+テスト:      225 (cargo test、CI green)
 版:          0.2.1
 exit(1):     0 コマンド (全 4 動詞 graceful exit)
 ```
