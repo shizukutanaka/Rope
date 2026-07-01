@@ -705,6 +705,20 @@ impl ConfidentialManager {
         format!("unverified-digest:{}", hex::encode(&digest.as_bytes()[..8]))
     }
 
+    /// attestation が interval 内で鮮度を保っているか。
+    ///
+    /// `last_attestation` が無い (未 attest) 場合は鮮度なしとみなす。
+    /// `create_secure_session` / `refresh_expired_attestations` / `validate_against_policy`
+    /// の 3 箇所で同一基準を使うことで、鮮度チェックの抜け漏れを防ぐ (1 箇所修正で全箇所反映)。
+    /// free function (self を取らない): `&mut self.tee_instances` を走査しながらでも
+    /// 借用衝突なく呼べる。
+    fn attestation_is_fresh(instance: &TeeInstance, interval_seconds: u32) -> bool {
+        instance
+            .last_attestation
+            .map(|last| (Utc::now() - last).num_seconds() <= interval_seconds as i64)
+            .unwrap_or(false)
+    }
+
     /// セキュアセッションを作成
     pub fn create_secure_session(
         &mut self,
@@ -724,13 +738,7 @@ impl ConfidentialManager {
         // 問⑯: Verified ステータスは refresh_expired_attestations() を呼ぶまで
         // 古いまま残り、期限切れの attestation でセッションが作られる。
         // 外部からの refresh 呼び出しに依存せず、鮮度を直接確認する。
-        let stale = instance
-            .last_attestation
-            .map(|last| {
-                (Utc::now() - last).num_seconds() > self.config.attestation_interval_seconds as i64
-            })
-            .unwrap_or(true); // last_attestation = None → 未 attest → stale
-        if stale {
+        if !Self::attestation_is_fresh(instance, self.config.attestation_interval_seconds) {
             anyhow::bail!(
                 "TEE attestation 期限切れ — perform_attestation を再実行してください \
                  (interval: {}s)",
@@ -790,7 +798,12 @@ impl ConfidentialManager {
         }
 
         // アテステーションチェック
-        if policy.attestation_required && instance.attestation_status != AttestationStatus::Verified
+        // 問: Verified ステータスだけでは refresh_expired_attestations() が呼ばれる
+        // までキャッシュが古いまま残りうる (create_secure_session と同じ穴)。
+        // 鮮度も直接確認することで、ポリシー検証の抜け道を塞ぐ。
+        if policy.attestation_required
+            && (instance.attestation_status != AttestationStatus::Verified
+                || !Self::attestation_is_fresh(instance, self.config.attestation_interval_seconds))
         {
             return Ok(false);
         }
@@ -800,7 +813,7 @@ impl ConfidentialManager {
 
     /// 期限切れアテステーションを更新
     pub fn refresh_expired_attestations(&mut self) -> Vec<String> {
-        let now = Utc::now();
+        let interval = self.config.attestation_interval_seconds;
         let mut refreshed = Vec::new();
 
         for instance in &mut self.tee_instances {
@@ -809,12 +822,7 @@ impl ConfidentialManager {
             }
 
             // 最終アテステーションからの経過時間をチェック
-            let needs_refresh = instance
-                .last_attestation
-                .map(|last| {
-                    (now - last).num_seconds() > self.config.attestation_interval_seconds as i64
-                })
-                .unwrap_or(true);
+            let needs_refresh = !Self::attestation_is_fresh(instance, interval);
 
             if needs_refresh {
                 instance.attestation_status = AttestationStatus::Expired;
@@ -920,7 +928,7 @@ pub fn format_confidential(manager: &ConfidentialManager) -> String {
         output.push_str(&format!(
             "  {} {} - {} ({}) {}\n",
             instance.status.icon(),
-            &instance.id[..instance.id.len().min(8)],
+            super::short(&instance.id, 8),
             instance.tee_type,
             instance.security_level,
             instance.attestation_status.icon()
@@ -1032,6 +1040,50 @@ mod tests {
             "期限切れ attestation でセッションを作成できてはならない"
         );
         assert!(result.unwrap_err().to_string().contains("期限切れ"));
+    }
+
+    /// validate_against_policy は create_secure_session と同じ鮮度基準を使う。
+    /// status が Verified のまま残っていても、last_attestation が期限切れなら
+    /// attestation_required なポリシーは拒否すべき (直接呼び出し経路の抜け道防止)。
+    #[test]
+    fn test_validate_against_policy_rejects_stale_attestation() {
+        let mut m = ConfidentialManager::default();
+        let inst =
+            m.create_tee_instance("gpu-1", "H100", TeeType::NvidiaGpuTee, SecurityLevel::High);
+        m.perform_attestation(&inst.id).unwrap();
+
+        m.add_policy(SecurityPolicy {
+            id: "p".to_string(),
+            name: "p".to_string(),
+            description: "".to_string(),
+            min_security_level: SecurityLevel::Standard,
+            attestation_required: true,
+            attestation_validity_seconds: 3600,
+            allowed_tee_types: vec![],
+            allow_debug_mode: false,
+            min_tcb_version: None,
+            created_at: Utc::now(),
+            enabled: true,
+        });
+
+        // 直後は Verified かつ新鮮 → 通る
+        let fresh = m.tee_instances.iter().find(|i| i.id == inst.id).unwrap();
+        assert!(m.validate_against_policy(fresh, "p").unwrap());
+
+        // last_attestation を期限切れに巻き戻す (status は Verified のまま)
+        let interval = m.config.attestation_interval_seconds as i64;
+        m.tee_instances
+            .iter_mut()
+            .find(|i| i.id == inst.id)
+            .unwrap()
+            .last_attestation = Some(Utc::now() - chrono::Duration::seconds(interval + 1));
+
+        let stale = m.tee_instances.iter().find(|i| i.id == inst.id).unwrap();
+        assert_eq!(stale.attestation_status, AttestationStatus::Verified);
+        assert!(
+            !m.validate_against_policy(stale, "p").unwrap(),
+            "期限切れ attestation はポリシー検証を通過してはならない"
+        );
     }
 
     /// 問⑰: detect_replay_anomaly の窓が attestation_interval に合わせて拡張される。
