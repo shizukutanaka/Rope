@@ -103,8 +103,6 @@ pub struct EcashManager {
     pub streams: Vec<StreamSession>,
     /// streaming 履歴
     pub stream_history: Vec<StreamSession>,
-    /// Lightning 接続 (mint経由、直接チャネル不要)
-    pub lightning_links: Vec<LightningLink>,
     /// 設定
     pub config: EcashConfig,
     /// 統計
@@ -122,7 +120,6 @@ impl Default for EcashManager {
             escrow_history: Vec::new(),
             streams: Vec::new(),
             stream_history: Vec::new(),
-            lightning_links: Vec::new(),
             config: EcashConfig::default(),
             stats: EcashStats::default(),
             updated_at: Utc::now(),
@@ -316,22 +313,6 @@ pub enum StreamState {
     Closed,
     /// 異常終了 (ネット断、受取側応答なし)
     Stalled,
-}
-
-/// Lightning リンク — mint 経由間接接続
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LightningLink {
-    pub id: String,
-    pub mint_id: String,
-    /// LN ノード情報 (情報のみ、直接チャネルは持たない)
-    pub ln_node_pubkey: String,
-    pub ln_node_alias: String,
-    /// 最近の交換レート情報 (参考値)
-    pub exchange_rate_sats_per_usd: f64,
-    pub last_deposit_at: Option<DateTime<Utc>>,
-    pub last_withdrawal_at: Option<DateTime<Utc>>,
-    pub lifetime_deposits_sats: u64,
-    pub lifetime_withdrawals_sats: u64,
 }
 
 /// 設定
