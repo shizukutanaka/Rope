@@ -249,7 +249,10 @@ fn run_pair(accept_mode: &str) -> Result<()> {
     use core::pair::{format_pair, load_pair, save_pair, AcceptMode};
     use core::session::{Limits, Session, SessionState};
 
-    let _lock = core::config::LockGuard::acquire("pair")?;
+    let _lock = match acquire_lock_gracefully("pair") {
+        Some(l) => l,
+        None => return Ok(()),
+    };
     let mut mgr = load_pair()?;
     mgr.config.accept_mode = match accept_mode {
         "open" => AcceptMode::Open,
@@ -259,8 +262,11 @@ fn run_pair(accept_mode: &str) -> Result<()> {
         _ => anyhow::bail!("不明な accept モード: {}", accept_mode),
     };
 
-    // 孤児セッション掃除 (前回の waiting が溜まらないように)
-    core::session::prune_stale()?;
+    // 孤児セッション掃除 (前回の waiting が溜まらないように)。
+    // 失敗しても本動詞の本質ではないため non-fatal — crash させない。
+    if let Err(e) = core::session::prune_stale() {
+        eprintln!("⚠️  孤児セッション掃除スキップ ({})", e);
+    }
 
     // セッション開始: Idle → Waiting + 6桁 verify code
     // Apple 流 AirDrop UX: 同じ番号が両側に出れば本物
@@ -317,10 +323,7 @@ fn run_inference(model: &str, prompt: &str, budget_sats: u64, privacy_str: &str)
     )
     .with_privacy(privacy);
 
-    println!(
-        "💭 Intent 構築済 ({})",
-        &intent.id[..intent.id.len().min(8)]
-    );
+    println!("💭 Intent 構築済 ({})", core::short(&intent.id, 8));
     println!("  モデル: {}", model);
     println!("  プロンプト: {}", truncate_str(prompt, 60));
     println!("  プライバシー: {}", intent.privacy);
@@ -329,12 +332,15 @@ fn run_inference(model: &str, prompt: &str, budget_sats: u64, privacy_str: &str)
 
     // ROPE_2028: Intent::resolve を実行 (前は TODO だった)
     // ロックで load→submit→save を排他化 (G5: 並行 run の更新喪失を防ぐ)
-    let _lock = core::config::LockGuard::acquire("intent")?;
+    let _lock = match acquire_lock_gracefully("intent") {
+        Some(l) => l,
+        None => return Ok(()),
+    };
     let mut mgr = load_intent()?;
     let intent_id = mgr.submit(intent)?;
     let plan = mgr.resolve(&intent_id)?;
 
-    println!("⚙️  実行計画 ({})", &plan.id[..plan.id.len().min(8)]);
+    println!("⚙️  実行計画 ({})", core::short(&plan.id, 8));
     println!("  プロバイダ: {}", plan.selected_provider);
     println!("  ステップ数: {}", plan.steps.len());
     if !plan.optimizations.is_empty() {
@@ -372,15 +378,21 @@ fn run_earn(rate_sats_per_sec: u64, max_minutes: u32) -> Result<()> {
     use core::pair::{load_pair, save_pair, AcceptMode};
     use core::session::{Limits, Session, SessionState};
 
-    let _lock = core::config::LockGuard::acquire("pair")?;
+    let _lock = match acquire_lock_gracefully("pair") {
+        Some(l) => l,
+        None => return Ok(()),
+    };
     let mut mgr = load_pair()?;
     if mgr.config.accept_mode == AcceptMode::Off {
         mgr.config.accept_mode = AcceptMode::LanOnly;
     }
     save_pair(&mgr)?;
 
-    // 孤児セッション掃除 (前回の waiting が溜まらないように)
-    core::session::prune_stale()?;
+    // 孤児セッション掃除 (前回の waiting が溜まらないように)。
+    // 失敗しても本動詞の本質ではないため non-fatal — crash させない。
+    if let Err(e) = core::session::prune_stale() {
+        eprintln!("⚠️  孤児セッション掃除スキップ ({})", e);
+    }
 
     // 貸出セッション = Waiting 状態を永続化
     let limits = Limits {
@@ -396,7 +408,7 @@ fn run_earn(rate_sats_per_sec: u64, max_minutes: u32) -> Result<()> {
     println!("  レート: {} sats/秒", rate_sats_per_sec);
     println!("  最大稼働: {} 分", max_minutes);
     println!("  受付モード: {}", mgr.config.accept_mode);
-    println!("  セッション ID: {}", &sess.id[..sess.id.len().min(8)]);
+    println!("  セッション ID: {}", core::short(&sess.id, 8));
     if let Some(code) = &sess.verify_code {
         println!("  🔢 確認コード: {}", code);
     }
@@ -413,6 +425,24 @@ fn run_earn(rate_sats_per_sec: u64, max_minutes: u32) -> Result<()> {
         working: "Session::Waiting 状態 + verify code + ecash 残高",
         next: "実 GPU 貸出ループ (mDNS リスナ + Noise 受信)"
     );
+}
+
+/// プロセス間ロックを取得。取得できなければ (別 rope プロセスが実行中等)
+/// crash させず友好的なメッセージを出して `None` を返す。
+/// 呼び出し元は `None` の場合 `Ok(())` で graceful に exit(0) する
+/// (「crash (exit 非ゼロ) は絶対に出さない」という capability_boundary の方針を
+/// ロック競合時にも一貫させる — 旧実装は `?` で伝播し exit(1) していた)。
+fn acquire_lock_gracefully(name: &str) -> Option<core::config::LockGuard> {
+    match core::config::LockGuard::acquire(name) {
+        Ok(lock) => Some(lock),
+        Err(e) => {
+            println!();
+            println!("⚠️  別の rope プロセスが実行中の可能性があります ({})", e);
+            println!("   完了を待つか、そちらのプロセスを終了してから再実行してください。");
+            println!();
+            None
+        }
+    }
 }
 
 /// 文字列を指定文字数で切り詰め (ユーザー表示用)
