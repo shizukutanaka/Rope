@@ -87,6 +87,10 @@ enum Verb {
         /// プライバシー要求 (any / on-device / tee-only)
         #[arg(long, default_value = "tee-only")]
         privacy: String,
+
+        /// 検証レベル (none / attested / zk / full)。tee-only は attested 以上が必須
+        #[arg(long, default_value = "none")]
+        verification: String,
     },
 
     /// 自分の GPU を貸し出す
@@ -137,7 +141,8 @@ fn run() -> Result<()> {
             prompt,
             budget,
             privacy,
-        }) => run_inference(&model, &prompt, budget, &privacy),
+            verification,
+        }) => run_inference(&model, &prompt, budget, &privacy, &verification),
         Some(Verb::Earn { rate, max_minutes }) => run_earn(rate, max_minutes),
     }
 }
@@ -298,14 +303,30 @@ fn run_pair(accept_mode: &str) -> Result<()> {
 // rope run — 推論実行
 // ============================================================================
 
-fn run_inference(model: &str, prompt: &str, budget_sats: u64, privacy_str: &str) -> Result<()> {
-    use core::intent::{load_intent, save_intent, BudgetEnforcement, Intent, Privacy, Workload};
+fn run_inference(
+    model: &str,
+    prompt: &str,
+    budget_sats: u64,
+    privacy_str: &str,
+    verification_str: &str,
+) -> Result<()> {
+    use core::confidential::load_confidential;
+    use core::intent::{
+        load_intent, save_intent, BudgetEnforcement, Intent, Privacy, VerificationLevel, Workload,
+    };
 
     let privacy = match privacy_str {
         "any" => Privacy::AnyCompute,
         "on-device" => Privacy::OnDeviceOnly,
         "tee-only" => Privacy::ConfidentialCompute,
         _ => anyhow::bail!("不明な privacy: {}", privacy_str),
+    };
+    let verification = match verification_str {
+        "none" => VerificationLevel::None,
+        "attested" => VerificationLevel::Attested,
+        "zk" => VerificationLevel::ZeroKnowledge,
+        "full" => VerificationLevel::Full,
+        _ => anyhow::bail!("不明な verification: {}", verification_str),
     };
 
     let user = std::env::var("USER").unwrap_or_else(|_| "you".to_string());
@@ -320,6 +341,7 @@ fn run_inference(model: &str, prompt: &str, budget_sats: u64, privacy_str: &str)
         },
         &user,
     )
+    .with_verification(verification)
     .with_budget(
         budget_sats as f64 / 100_000_000.0 * 50_000.0,
         BudgetEnforcement::Hard,
@@ -330,6 +352,7 @@ fn run_inference(model: &str, prompt: &str, budget_sats: u64, privacy_str: &str)
     println!("  モデル: {}", model);
     println!("  プロンプト: {}", truncate_str(prompt, 60));
     println!("  プライバシー: {}", intent.privacy);
+    println!("  検証レベル: {}", intent.verification);
     println!("  予算: {} sats", budget_sats);
     println!();
 
@@ -341,7 +364,10 @@ fn run_inference(model: &str, prompt: &str, budget_sats: u64, privacy_str: &str)
     };
     let mut mgr = load_intent()?;
     let intent_id = mgr.submit(intent)?;
-    let plan = mgr.resolve(&intent_id)?;
+    // 機密計算ルーティングの実ゲートに使う。読み込めなくても (未初期化含む)
+    // None として渡し、安全側 (検証済み TEE 無し扱い) に倒す。
+    let confidential = load_confidential().ok();
+    let plan = mgr.resolve(&intent_id, confidential.as_ref())?;
 
     println!("⚙️  実行計画 ({})", core::short(&plan.id, 8));
     println!("  プロバイダ: {}", plan.selected_provider);
@@ -527,11 +553,13 @@ mod tests {
                 prompt,
                 budget,
                 privacy,
+                verification,
             }) => {
                 assert_eq!(model, "llama-3.2-1b-instruct");
                 assert!(!prompt.is_empty());
                 assert_eq!(budget, 1000);
                 assert_eq!(privacy, "tee-only");
+                assert_eq!(verification, "none");
             }
             _ => panic!("Expected Run"),
         }
@@ -549,6 +577,8 @@ mod tests {
             "500",
             "--privacy",
             "any",
+            "--verification",
+            "attested",
         ])
         .unwrap();
         match cli.command {
@@ -557,11 +587,13 @@ mod tests {
                 prompt,
                 budget,
                 privacy,
+                verification,
             }) => {
                 assert_eq!(model, "mistral-7b");
                 assert_eq!(prompt, "Say hello");
                 assert_eq!(budget, 500);
                 assert_eq!(privacy, "any");
+                assert_eq!(verification, "attested");
             }
             _ => panic!("Expected Run"),
         }

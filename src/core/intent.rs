@@ -23,6 +23,7 @@
 //! - It is not a chat interface. It is the machine-readable contract
 //!   between user intent and Rope's internal modules.
 
+use super::confidential::ConfidentialManager;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -602,7 +603,17 @@ impl IntentManager {
     ///
     /// This is deliberately synchronous and fast: the point is that the
     /// user sees exactly what will happen before it happens.
-    pub fn resolve(&mut self, intent_id: &str) -> Result<ExecutionPlan> {
+    /// Intent を ExecutionPlan へ解決する。
+    ///
+    /// `confidential` は `Privacy::ConfidentialCompute` (TEE 必須) の実ルーティング判断に使う。
+    /// `None` を渡すと (呼び出し元が ConfidentialManager を持たない場合)、
+    /// 機密計算ジョブは「検証済み TEE 無し」として安全側 (infeasible) に倒れる —
+    /// 「TEE 検証済みかどうか分からない」を「検証済みとみなす」より安全な既定動作。
+    pub fn resolve(
+        &mut self,
+        intent_id: &str,
+        confidential: Option<&ConfidentialManager>,
+    ) -> Result<ExecutionPlan> {
         let intent = self
             .intents
             .iter()
@@ -633,7 +644,7 @@ impl IntentManager {
 
         // Step 2: pick provider honoring privacy
         order += 1;
-        let provider = Self::select_provider(&intent);
+        let provider = Self::select_provider(&intent, confidential);
         let (provider_ms, provider_cost) = Self::estimate_provider_cost(&provider, &intent);
         estimated_cost += provider_cost;
         estimated_ms += provider_ms;
@@ -723,7 +734,8 @@ impl IntentManager {
         }
 
         // Feasibility check
-        let (feasible, reason) = self.check_feasibility(&intent, estimated_cost, estimated_ms);
+        let (feasible, reason) =
+            self.check_feasibility(&intent, estimated_cost, estimated_ms, confidential);
 
         let plan = ExecutionPlan {
             id: uuid::Uuid::now_v7().to_string(),
@@ -778,7 +790,10 @@ impl IntentManager {
         }
     }
 
-    fn select_provider(intent: &Intent) -> ProviderChoice {
+    fn select_provider(
+        intent: &Intent,
+        confidential: Option<&ConfidentialManager>,
+    ) -> ProviderChoice {
         // The provider cascade encodes the Apple-like preference:
         // on-device → federation → spot → hyperscaler.
         if intent.privacy.requires_local() {
@@ -787,9 +802,22 @@ impl IntentManager {
             };
         }
         if intent.privacy.requires_tee() {
-            return ProviderChoice::FederatedPeer {
-                peer_id: "tee-peer".to_string(),
-                trust_score: 1.0,
+            // 旧実装は実 attestation 状態を一切見ずに固定のプレースホルダー peer
+            // ("tee-peer", trust_score=1.0) を返していた — 検証済み TEE が
+            // ゼロ個でも常に "feasible" な選択肢に見えていた欠陥。
+            // ConfidentialManager から鮮度確認済みの実インスタンスを引く。
+            // 無ければ trust_score=0.0 の番兵値を返し、check_feasibility 側の
+            // 実ゲートで infeasible に倒す (ここで直接 bail しないのは、
+            // select_provider が Result を返さない現行シグネチャを維持するため)。
+            return match confidential.and_then(|cm| cm.freshest_verified_instance()) {
+                Some(inst) => ProviderChoice::FederatedPeer {
+                    peer_id: inst.id.clone(),
+                    trust_score: 1.0,
+                },
+                None => ProviderChoice::FederatedPeer {
+                    peer_id: "no-verified-tee".to_string(),
+                    trust_score: 0.0,
+                },
             };
         }
 
@@ -966,6 +994,7 @@ impl IntentManager {
         intent: &Intent,
         cost: f64,
         latency: u32,
+        confidential: Option<&ConfidentialManager>,
     ) -> (bool, Option<String>) {
         // 安全不変条件 (#2×#3): TEE 機密計算は attestation 検証なしには保証できない。
         // 検証なしで「プロンプトは相手に見えない」と称するのは、TEE を自称するだけの
@@ -978,6 +1007,26 @@ impl IntentManager {
                         .to_string(),
                 ),
             );
+        }
+        // 上のチェックは「ユーザーが検証を要求したか」だけを見ており、
+        // 「実際に検証済みの TEE インスタンスが存在するか」は別問題だった。
+        // select_provider が確認済み peer を見つけられなかった場合の番兵値
+        // (trust_score == 0.0) をここで検出し、確実に infeasible にする —
+        // ルーティング層とフィージビリティ層で二重に安全側へ倒す。
+        if intent.privacy.requires_tee() {
+            let has_verified_tee = confidential
+                .map(|cm| cm.freshest_verified_instance().is_some())
+                .unwrap_or(false);
+            if !has_verified_tee {
+                return (
+                    false,
+                    Some(
+                        "機密計算(TEE必須)だが、鮮度確認済み (attestation 有効期限内) の \
+                         TEE インスタンスが見つかりません"
+                            .to_string(),
+                    ),
+                );
+            }
         }
         if let Some(budget) = &intent.budget {
             if matches!(budget.enforcement, BudgetEnforcement::Hard) && cost > budget.max_usd {
@@ -1155,7 +1204,7 @@ mod tests {
         let mut m = IntentManager::default();
         let i = sample_inference().with_privacy(Privacy::OnDeviceOnly);
         let id = m.submit(i).unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         assert!(matches!(
             plan.selected_provider,
             ProviderChoice::LocalDevice { .. }
@@ -1171,7 +1220,7 @@ mod tests {
             .with_privacy(Privacy::AnyCompute)
             .with_budget(0.00001, BudgetEnforcement::Hard);
         let id = m.submit(i).unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         assert!(!plan.feasible);
         assert!(plan.infeasibility_reason.is_some());
     }
@@ -1181,7 +1230,7 @@ mod tests {
         let mut m = IntentManager::default();
         let i = sample_inference().with_privacy(Privacy::OnDeviceOnly);
         let id = m.submit(i).unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         assert!(plan.selected_model_variant.ends_with("-int4"));
         assert!(plan.optimizations.contains(&Optimization::Quantization));
     }
@@ -1193,7 +1242,7 @@ mod tests {
             .with_privacy(Privacy::AnyCompute)
             .with_latency_ms(100, LatencyTolerance::Soft);
         let id = m.submit(i).unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         assert!(plan
             .optimizations
             .contains(&Optimization::SpeculativeDecoding));
@@ -1204,7 +1253,7 @@ mod tests {
         let mut m = IntentManager::default();
         let i = sample_inference().with_verification(VerificationLevel::ZeroKnowledge);
         let id = m.submit(i).unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         assert!(plan.steps.iter().any(|s| s.action.contains("proof")));
     }
 
@@ -1246,7 +1295,7 @@ mod tests {
         )
         .with_privacy(Privacy::AnyCompute);
         let id = m.submit(i).unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         assert!(plan.optimizations.contains(&Optimization::SemanticCache));
     }
 
@@ -1255,7 +1304,7 @@ mod tests {
         let mut m = IntentManager::default();
         let i = sample_inference(); // default privacy is OnDevicePreferred
         let id = m.submit(i).unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         // 500+200 = 700 tokens = Small → LocalDevice
         assert!(matches!(
             plan.selected_provider,
@@ -1268,7 +1317,7 @@ mod tests {
         let mut m = IntentManager::default();
         let i = sample_inference().with_privacy(Privacy::ConfidentialCompute);
         let id = m.submit(i).unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         assert!(matches!(
             plan.selected_provider,
             ProviderChoice::FederatedPeer { .. }
@@ -1283,7 +1332,7 @@ mod tests {
         // default verification = None
         let i = sample_inference().with_privacy(Privacy::ConfidentialCompute);
         let id = m.submit(i).unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         assert!(!plan.feasible, "TEE 必須 + 検証なしは危険なので infeasible");
         assert!(plan
             .infeasibility_reason
@@ -1292,16 +1341,103 @@ mod tests {
             .contains("Attested"));
     }
 
-    /// ConfidentialCompute に Attested 検証を付ければ feasible に戻る。
+    /// ConfidentialCompute に Attested 検証を付けても、実際に鮮度確認済みの
+    /// Verified TEE インスタンスが無ければ infeasible のまま。
+    ///
+    /// 旧実装は select_provider が実 attestation 状態を一切見ずに固定の
+    /// プレースホルダー peer ("tee-peer", trust_score=1.0) を返しており、
+    /// intent.verification さえ設定すれば (実ピアの検証状態と無関係に) feasible に
+    /// なっていた欠陥があった。ConfidentialManager を渡さない (= None) 場合、
+    /// 「検証済み TEE が実在するか不明」を安全側 (infeasible) として扱うべき。
     #[test]
-    fn test_confidential_with_attestation_is_feasible() {
+    fn test_confidential_with_attestation_but_no_real_tee_is_still_infeasible() {
         let mut m = IntentManager::default();
         let i = sample_inference()
             .with_privacy(Privacy::ConfidentialCompute)
             .with_verification(VerificationLevel::Attested);
         let id = m.submit(i).unwrap();
-        let plan = m.resolve(&id).unwrap();
-        assert!(plan.feasible, "TEE + Attested は安全なので feasible");
+        let plan = m.resolve(&id, None).unwrap();
+        assert!(
+            !plan.feasible,
+            "検証済み TEE インスタンスが実在しないなら infeasible であるべき"
+        );
+        assert!(plan
+            .infeasibility_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("TEE インスタンス"));
+    }
+
+    /// ConfidentialCompute + Attested + 実際に鮮度確認済みの Verified TEE インスタンスが
+    /// 存在する場合のみ feasible になり、そのインスタンスへ実際にルーティングされる。
+    #[test]
+    fn test_confidential_with_real_verified_tee_is_feasible_and_routes_to_it() {
+        use super::super::confidential::{ConfidentialManager, SecurityLevel, TeeType};
+
+        let mut cm = ConfidentialManager::default();
+        let inst =
+            cm.create_tee_instance("gpu-1", "H100", TeeType::NvidiaGpuTee, SecurityLevel::High);
+        let report = cm.perform_attestation(&inst.id).unwrap();
+        assert!(
+            report.verification_result.success,
+            "テスト前提: H100 は attest 成功のはず"
+        );
+
+        let mut m = IntentManager::default();
+        let i = sample_inference()
+            .with_privacy(Privacy::ConfidentialCompute)
+            .with_verification(VerificationLevel::Attested);
+        let id = m.submit(i).unwrap();
+        let plan = m.resolve(&id, Some(&cm)).unwrap();
+
+        assert!(
+            plan.feasible,
+            "実 Verified TEE があれば feasible であるべき"
+        );
+        match &plan.selected_provider {
+            ProviderChoice::FederatedPeer {
+                peer_id,
+                trust_score,
+            } => {
+                assert_eq!(
+                    peer_id, &inst.id,
+                    "実インスタンスの ID へルーティングされるべき"
+                );
+                assert_eq!(*trust_score, 1.0);
+            }
+            other => panic!("FederatedPeer を期待: {:?}", other),
+        }
+    }
+
+    /// attestation が期限切れの TEE インスタンスは「検証済み」として扱われない
+    /// (confidential.rs の鮮度基準 attestation_is_fresh と一貫)。
+    #[test]
+    fn test_confidential_with_stale_attestation_is_infeasible() {
+        use super::super::confidential::{ConfidentialManager, SecurityLevel, TeeType};
+
+        let mut cm = ConfidentialManager::default();
+        let inst =
+            cm.create_tee_instance("gpu-1", "H100", TeeType::NvidiaGpuTee, SecurityLevel::High);
+        cm.perform_attestation(&inst.id).unwrap();
+        // last_attestation を期限切れに巻き戻す (status は Verified のまま残る)
+        let interval = cm.config.attestation_interval_seconds as i64;
+        cm.tee_instances
+            .iter_mut()
+            .find(|i| i.id == inst.id)
+            .unwrap()
+            .last_attestation = Some(Utc::now() - chrono::Duration::seconds(interval + 1));
+
+        let mut m = IntentManager::default();
+        let i = sample_inference()
+            .with_privacy(Privacy::ConfidentialCompute)
+            .with_verification(VerificationLevel::Attested);
+        let id = m.submit(i).unwrap();
+        let plan = m.resolve(&id, Some(&cm)).unwrap();
+
+        assert!(
+            !plan.feasible,
+            "attestation 期限切れの TEE は検証済みとみなすべきでない"
+        );
     }
 
     /// EnergyPreference::MinimizeWatts は AnyCompute の小ジョブをローカルへ寄せ、
@@ -1314,7 +1450,7 @@ mod tests {
             .with_privacy(Privacy::AnyCompute)
             .with_energy(EnergyPreference::MinimizeWatts);
         let id = m.submit(i).unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         assert!(
             matches!(plan.selected_provider, ProviderChoice::LocalDevice { .. }),
             "省エネ指定の小ジョブは最小エネルギーのローカルへ"
@@ -1338,7 +1474,7 @@ mod tests {
         .with_privacy(Privacy::AnyCompute)
         .with_energy(EnergyPreference::MinimizeWatts);
         let id = m.submit(i).unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         assert!(
             matches!(plan.selected_provider, ProviderChoice::FederatedPeer { .. }),
             "大規模 + 省エネは spot ではなく低エネルギー peer へ委譲"
@@ -1352,7 +1488,7 @@ mod tests {
         let mut m = IntentManager::default();
         let i = sample_inference().with_privacy(Privacy::AnyCompute); // energy = Unconstrained
         let id = m.submit(i).unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         assert!(!plan.optimizations.contains(&Optimization::EnergyAware));
     }
 
@@ -1516,7 +1652,7 @@ mod tests {
             "test",
         );
         let id = mgr.submit(intent).unwrap();
-        let plan = mgr.resolve(&id).unwrap();
+        let plan = mgr.resolve(&id, None).unwrap();
         let out = format_plan(&plan);
         assert!(out.contains('═'), "ヘッダ罫線");
         assert!(out.contains("プロバイダ"), "プロバイダ");
@@ -1536,7 +1672,7 @@ mod tests {
             "u",
         );
         let id = mgr.submit(intent).unwrap();
-        let plan = mgr.resolve(&id).unwrap();
+        let plan = mgr.resolve(&id, None).unwrap();
         let out = format_plan(&plan);
         // Display 出力 "ローカル" を使用、Debug 出力 "LocalDevice" ではない
         assert!(out.contains("ローカル"), "Display impl 使用");
@@ -1577,7 +1713,7 @@ mod tests {
         let id = m
             .submit(make_intent_with_energy(EnergyPreference::RenewableOnly))
             .unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         let has_federated = plan.steps.iter().any(|s| s.action.contains("ピア"));
         let has_spot = plan.steps.iter().any(|s| s.action.contains("Spot"));
         assert!(
@@ -1594,7 +1730,7 @@ mod tests {
         let id = m
             .submit(make_intent_with_energy(EnergyPreference::PreferRenewable))
             .unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         let has_spot = plan.steps.iter().any(|s| s.action.contains("Spot"));
         assert!(!has_spot, "PreferRenewable は SpotMarket を避けるべき");
     }
@@ -1606,7 +1742,7 @@ mod tests {
         let id = m
             .submit(make_intent_with_energy(EnergyPreference::Unconstrained))
             .unwrap();
-        let plan = m.resolve(&id).unwrap();
+        let plan = m.resolve(&id, None).unwrap();
         // AnyCompute + 非エネルギー制約 → SpotMarket (プロバイダ step に含まれる)
         assert!(!plan.optimizations.contains(&Optimization::EnergyAware));
     }

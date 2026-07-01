@@ -835,11 +835,31 @@ impl ConfidentialManager {
     }
 
     /// 検証済みTEE数
+    ///
+    /// 注意: `attestation_status == Verified` のみを見ており、鮮度 (`last_attestation`)
+    /// は未考慮。鮮度込みでルーティング判断したい呼び出し元は
+    /// `freshest_verified_instance` を使うこと。
     pub fn verified_tee_count(&self) -> usize {
         self.tee_instances
             .iter()
             .filter(|i| i.attestation_status == AttestationStatus::Verified)
             .count()
+    }
+
+    /// 実際にジョブを委任できる、鮮度確認済み (Verified かつ attestation_interval 内) の
+    /// TEE インスタンスを1つ返す。無ければ `None`。
+    ///
+    /// `intent::select_provider` が「機密計算ピア」を選ぶ際、実 attestation 状態を
+    /// 一切見ずに固定のプレースホルダー peer を返していた欠陥への応答。
+    /// `create_secure_session`/`validate_against_policy` と同じ鮮度基準を使う
+    /// (`attestation_is_fresh`) ことで、ルーティング判断とセッション確立の
+    /// 整合性を保つ。
+    pub fn freshest_verified_instance(&self) -> Option<&TeeInstance> {
+        self.tee_instances
+            .iter()
+            .filter(|i| i.attestation_status == AttestationStatus::Verified)
+            .filter(|i| Self::attestation_is_fresh(i, self.config.attestation_interval_seconds))
+            .max_by_key(|i| i.last_attestation)
     }
 
     /// アクティブTEE数
