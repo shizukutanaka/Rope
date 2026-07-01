@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-07-01
+
+前回 (v0.2.8) 「要判断」として持ち越した2件 (proof-of-capability, SecurityPolicy)
+の削除/結線判断を実施。加えて `rope pair` 自体が QR を含む一切の実ピア動作を
+実行しないことを確認した。
+
+### Investigated (コード変更なしの判断)
+
+#### `pair::CapabilityChallenge` / proof-of-capability — **保持と判定**
+- `docs/RESEARCH_IMPROVEMENTS.md` #10 (Sybil耐性/評判、優先度「高」) に明示的な
+  ロードマップ記載があり、実装・テストも完了済み。`rope pair` が実ピア発見を
+  一切実行しない (QR も含め、mDNS/Bluetooth/QR いずれも v0.3 で実結線予定)
+  ため現状無到達なだけであり、「削除すべき過剰機能」ではなく「正当に留保された
+  v0.3 API」と判定。ステータスを doc comment に明記し、将来の誤削除を防止
+
+#### `confidential::SecurityPolicy` — **判断を保留、設計上の重複を明記**
+- proof-of-capability と異なり、ロードマップに一切記載が無い。さらに
+  `intent::IntentManager` の TEE feasibility ゲート (`freshest_verified_instance`,
+  v0.2.6) がこの機構を使わず、独自に「Verified かつ鮮度内」をハードコード判定
+  しており、同種の判定ロジックが2箇所に分散している設計上の重複を発見。
+  削除するか intent 側をポリシー経由に統合するか、次回判断が必要な旨を
+  doc comment に明記 (この版では判断を下さず、状況を正直に記録するに留めた)
+
+#### `rope pair` が QR ペアリングも含め一切の実ピア動作をしないことを確認
+- `Pair` 動詞の doc comment は「AirDrop 式ピア発見 (mDNS / Bluetooth / QR)」と
+  謳うが、`main.rs::run_pair` は `record_discovery`/`begin_handshake`/
+  `accept_pairing_token` のいずれも呼んでいない。QR は実ネットワーク I/O 不要
+  なため CLI に追加できないか検討したが、QR トークンに載せる `endpoint` 自体が
+  実在しない (リスニングソケット未実装) ため、追加すれば「本物のピアに
+  つながるふり」を新たに作るだけになると判断し、実装を見送った。
+  TEE/ペアルーティング修正 (v0.2.6/v0.2.7) で確立した「本物でなければ正直に
+  infeasible にする」原則と整合する判断
+
 ## [0.2.8] - 2026-07-01
 
 ソクラテス式問答法を継続。前回 (v0.2.7) は「機能が足りない」側の発見だったが、

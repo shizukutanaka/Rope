@@ -362,6 +362,14 @@ impl PairingToken {
 ///
 /// 初回ピアに対して、実際に計算タスクをこなせるか確認する仕組み。
 /// リプレイ攻撃を防ぐため nonce + タイムスタンプで一意性を確保。
+///
+/// **ステータス (問㉛)**: `docs/RESEARCH_IMPROVEMENTS.md` #10 (Sybil耐性/評判、
+/// 優先度「高」) で明示的にロードマップ入りしている機能であり、実装・テストも
+/// 完了済み。ただし `rope pair` は実ピア発見・ハンドシェイクを一切実行しない
+/// (mDNS/Bluetooth/QR いずれも v0.3 で実結線予定) ため、この struct とその
+/// メソッド群 (`issue_capability_challenge` 等) は現状どの動詞からも呼ばれない。
+/// これは「削除すべき過剰機能」ではなく「正当に留保された v0.3 API」——
+/// 実ピア発見が結線された時点で `begin_handshake` 完了後にそのまま接続すればよい。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityChallenge {
     /// チャレンジ一意識別子

@@ -367,6 +367,18 @@ impl std::fmt::Display for EncryptionAlgorithm {
 }
 
 /// セキュリティポリシー
+///
+/// **ステータス (問㉜)**: `CapabilityChallenge` (pair.rs) と異なり、この機能は
+/// `docs/RESEARCH_IMPROVEMENTS.md` のロードマップに一切記載が無く、
+/// `add_policy`/`validate_against_policy` は main.rs のどの動詞からも呼ばれない。
+/// さらに、`intent::IntentManager` の TEE feasibility ゲート
+/// (`ConfidentialManager::freshest_verified_instance`, v0.2.6) はこの機構を
+/// 使わず、独自に「Verified かつ鮮度内」だけをハードコードで判定している——
+/// 本来この判定はポリシー (min_security_level, allowed_tee_types 等) 込みで
+/// `validate_against_policy` に委譲する設計の方が一貫していたはずで、
+/// 現状は同種の判定が2箇所に分散している。次に触る際は
+/// (a) intent 側をポリシー経由に統合するか、(b) ロードマップに無い以上
+/// 削除するか、いずれかの判断を推奨する (このコメント自体は判断を下さない)。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityPolicy {
     /// ポリシーID
