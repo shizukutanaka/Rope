@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-07-01
+
+ドキュメントの実態不一致を対象にした監査。コード変更は無し。
+
+### Fixed
+
+#### CI が一度も実行されていなかった (発見のみ、有効化は保留)
+- `.github/ci.yml.disabled` は import 時 (v0.1.0) からこの名前・場所にあり、
+  `.github/workflows/` 直下に置かれていないため **GitHub Actions が一度も認識・
+  実行していなかった**。README/CHANGELOG が一貫して謳ってきた「CI green」は
+  実際にはローカルでの `cargo test`/`clippy`/`fmt` 実行結果であり、CI による
+  自動ゲートではなかった。有効化 (`.github/workflows/ci.yml` への移動) は
+  リポジトリシークレットにアクセスする自動パイプラインを起動する操作のため、
+  本セッションでは承認が得られず保留 — 実施するかはユーザー判断。
+  表記を実態に合わせて訂正 (README, `docs/ASSESSMENT.md`)
+
+#### 壊れたドキュメントリンク
+- README が参照する `docs/internal/APPLE_METHOD.md` と `docs/internal/` は
+  存在しない (import 時から欠落)。`docs/ARCHITECTURE.md` のディレクトリ構造図も
+  存在しない `docs/internal/`, `docs/archive/`, `examples/job.yaml` を記載していた。
+  実在するファイル (`docs/ASSESSMENT.md`, `docs/RESEARCH_IMPROVEMENTS.md` 等) への
+  参照に置き換え、存在しないパスの記載を削除
+
+### Changed
+- `docs/ASSESSMENT.md` を v0.2.2/v0.2.3 の修正内容で更新 (改善点テーブル、
+  永続化の実態記述を「チェックポイント止まり」へ精緻化 — 完全な `atomic_write`/
+  `load_or_recover` インフラは健全だが、動詞内の個別状態遷移ごとの保存はまだ無い)
+
 ## [0.2.3] - 2026-07-01
 
 前回 (0.2.2) がカバーしなかった領域 (net/cashu_mint.rs の未結線 HTTP 翻訳層、

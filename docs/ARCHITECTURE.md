@@ -166,9 +166,12 @@ rope/
 │       ├── mod.rs
 │       └── cashu_mint.rs
 ├── docs/
-│   ├── ARCHITECTURE.md  # この文書
-│   ├── internal/        # 設計判断記録
-│   └── archive/         # 旧版
+│   ├── ARCHITECTURE.md          # この文書
+│   ├── ASSESSMENT.md            # 長所/短所/改善点の評価
+│   ├── RESEARCH_IMPROVEMENTS.md # 同種ソフト・arXiv 調査の優先度バックログ
+│   ├── CATEGORY_RESEARCH.md     # カテゴリ別調査
+│   └── IMPROVEMENT_SYNTHESIS.md # v0.3 統合改善案
 └── examples/
-    └── job.yaml
+    ├── quickstart.sh
+    └── library_usage.rs
 ```

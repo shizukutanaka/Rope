@@ -1,6 +1,7 @@
 # 現段階の評価 — 長所 / 短所 / 改善点
 
-> 評価日: 2026-06-23 / 対象: Rope (branch `claude/deepresearch-ultrathink-improve-wnYtn`)
+> 評価日: 2026-06-23 (初版) / 更新: 2026-07-01 (v0.2.3 反映) /
+> 対象: Rope (branch `claude/deepresearch-ultrathink-improve-wnYtn`)
 > 関連: [`RESEARCH_IMPROVEMENTS.md`](RESEARCH_IMPROVEMENTS.md)（優先度バックログ）,
 > [`CATEGORY_RESEARCH.md`](CATEGORY_RESEARCH.md)（10カテゴリ調査）
 
@@ -26,10 +27,22 @@
    実質 LAN デモ止まり（最大の機能的欠落）。
 3. **検証 (proof-of-execution) が薄い** — `VerificationLevel` は enum 中心。
    再実行/LSH コミット等の実機構は未実装（本セッションで escrow ゲートのみ前進）。
-4. **永続化なし** — ウォレット/escrow はメモリ状態。クラッシュで bearer token を失う
-   金銭損失リスク（実 ecash 結線時に「高」へ昇格）。
+4. **永続化はチェックポイント止まり** — `atomic_write`/`load_or_recover` 自体は健全
+   (tmp→rename、破損時デフォルト復帰) だが、`save_ecash` 等の呼び出しは各 CLI 動詞の
+   末尾 1 箇所のみ。動詞内の個々の状態遷移 (mint/escrow open/tick) ごとには保存されない。
+   現状は実 ecash 操作がどの動詞からも呼ばれていないため実害は無いが、
+   v0.3 で `rope run`/`rope earn` に実結線した瞬間、遷移の合間のクラッシュで
+   bearer token/escrow を失う金銭損失リスクへ昇格する（要 WAL 化）。
 5. **Sybil/評判の根拠が薄い** — `trust_store` は TOFU のみ。初回ピア選択の信頼基盤なし。
 6. **単一ピア前提** — 大規模モデルの複数ピア pipeline 分割なし。
+7. **「CI green」表記が実態と不一致だった** — CI 定義ファイルは import 時から
+   `.github/ci.yml.disabled` という名前・場所にあり、`.github/workflows/` 直下に
+   置かれていないため GitHub Actions が一度も認識・実行していなかった
+   (v0.1.0 の頃から)。README/CHANGELOG の「CI green」は実際にはローカルでの
+   `cargo test`/`clippy`/`fmt` 実行結果であり、CI による自動ゲートではなかった。
+   本ラウンドで表記を訂正 (`「cargo test 実通過、ローカル確認」`)。有効化自体は
+   リポジトリのシークレットにアクセスする自動パイプラインを起動する操作のため、
+   本セッションでは明示承認が下りず保留 — 有効化するかはユーザー判断。
 
 ## 改善点と本セッションでの改良 (Improvements)
 
@@ -44,10 +57,19 @@
 | **ecash 3 欠陥 (問⑪⑫⑬)** | ✅ 改良済 | `741f99d` |
 | **session 安全/権限プリミティブ硬化 (問⑭⑮)** | ✅ 改良済 | `b17864a` |
 | **confidential/intent 3 欠陥 (問⑯⑰⑱)** | ✅ 改良済 | `06a6693` |
-| **mint 額面検証 + lock liveness (問⑲⑳)** | ✅ **本コミット** | (this) |
-| NAT 越え (libp2p DCUtR) / Noise 実結線 | ⏳ 大 | — |
+| **mint 額面検証 + lock liveness (問⑲⑳)** | ✅ 改良済 | `036b8fe` |
+| **receive_proofs 二重加算 + lock_funds 価値消滅 (問㉑㉒)** | ✅ 改良済 | `f21f826` |
+| **LockGuard/prune_stale の exit(1) 契約違反** | ✅ 改良済 | `66d66da` |
+| **QR nonce リプレイ検出** | ✅ 改良済 | `eb648bc` |
+| **attestation ポリシー鮮度チェック統一** | ✅ 改良済 | `6c54889` |
+| **NUT-07 wire format 修正 (Ys/Y) + mint C 形式検証** | ✅ 改良済 | `701d077` |
+| **ARCHITECTURE.md 全モジュール行数/テスト数の実測再生成** | ✅ 改良済 | `c579a3a` |
+| **README/ASSESSMENT の壊れたリンク・CI green 誤表記の是正** | ✅ **本ラウンド** | (this) |
+| NAT 越え (libp2p DCUtR) / Noise 実結線 | ⏳ 大・新規依存要 | — |
 | 検証本体 (VeriLLM 風 再実行 / TOPLOC LSH) | ⏳ 大 | — |
-| 永続化 (ecash 状態の WAL/crash recovery) | ⏳ 中 | — |
+| BDHKE 実装 (secp256k1、現状は unblinding プレースホルダ) | ⏳ 大・新規依存要 | — |
+| 永続化の WAL 化 (現状は動詞末尾のチェックポイントのみ) | ⏳ 中 | — |
+| CI 有効化 (`.github/workflows/` への移動) | ⏳ 要ユーザー判断 (secrets アクセス) | — |
 | `RegionConstraint` 配線 (プロバイダ地域メタ必要) | ⏳ 保留 | — |
 
 ### ソクラテス式問答 Round 5 — ecash.rs の 3 欠陥

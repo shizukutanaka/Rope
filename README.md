@@ -100,8 +100,8 @@ rope earn             # 自分の GPU を貸し出す
 モジュール:  7 core + 1 net  (旧 122、-93%)
 main.rs:     604 行 (旧 11,594、-95%)
 総 Rust:     11,702 行 (旧 ~75,600、-85%)
-テスト:      232 (cargo test、CI green)
-版:          0.2.3
+テスト:      232 (cargo test 実通過、ローカル確認。CI は未配線 — 後述)
+版:          0.2.4
 exit(1):     ロック競合・孤児セッション掃除失敗では出さない (v0.2.2 で graceful 化)。
              致命的 I/O 障害 (disk full 等) では正直に exit(1) + 原因表示。
 ```
@@ -116,18 +116,19 @@ exit(1):     ロック競合・孤児セッション掃除失敗では出さな�
 4. **Work Backwards** — 60 秒の haiku から逆算
 5. **Wow Moment** — 「他人 GPU で AI が動いた」を初回体験
 
-詳細: [docs/internal/APPLE_METHOD.md](docs/internal/APPLE_METHOD.md)
-
 ---
 
 ## ドキュメント
 
 - [`CHANGELOG.md`](CHANGELOG.md) — 変更履歴 (SemVer)
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — 7 モジュール構造, 状態機械マップ, データフロー
+- [`docs/ASSESSMENT.md`](docs/ASSESSMENT.md) — 長所 / 短所 / 改善点の評価
+- [`docs/RESEARCH_IMPROVEMENTS.md`](docs/RESEARCH_IMPROVEMENTS.md) — 同種ソフト・arXiv 調査に基づく優先度バックログ
 - [`examples/quickstart.sh`](examples/quickstart.sh) — 4 動詞クイックスタート
 - [`examples/library_usage.rs`](examples/library_usage.rs) — core/ ライブラリ使用例
-- [`docs/internal/`](docs/internal/) — 設計判断記録 (ビジョン, 競合分析, 削除ログ等)
-- [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — CI (check / test / clippy / fmt)
+- [`.github/ci.yml.disabled`](.github/ci.yml.disabled) — CI 定義 (check / test / clippy / fmt)。
+  **注意**: `.github/workflows/` 直下に無いため GitHub Actions からは未認識・未実行
+  (import 時からこの状態 — 有効化は要判断のため保留中)
 
 ---
 
