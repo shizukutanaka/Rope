@@ -68,14 +68,16 @@
 | **src/lib.rs 新設 (core/net を真にライブラリ化)** | ✅ 改良済 | `dd02372` |
 | **library_usage.rs を実行可能な例へ書き換え** | ✅ 改良済 | `7f279d3` |
 | **`cargo install rope` が実際には動かない問題の是正** | ✅ 改良済 | `71f9ca0` |
-| **intent::select_provider が実 TEE 状態を無視する欠陥 (最重要)** | ✅ 改良済 | (this) |
-| **`rope run --verification` フラグ新設** | ✅ 改良済 | (this) |
+| **intent::select_provider が実 TEE 状態を無視する欠陥 (最重要)** | ✅ 改良済 | `a33c7c3` |
+| **`rope run --verification` フラグ新設** | ✅ 改良済 | `a33c7c3` |
+| **非TEE FederatedPeer 分岐も PairManager の実状態を無視 (問㉖、TEE修正の適用漏れ)** | ✅ 改良済 | (this) |
 | NAT 越え (libp2p DCUtR) / Noise 実結線 | ⏳ 大・新規依存要 (この環境では crates.io 制約で実施不能と判明) | — |
 | 検証本体 (VeriLLM 風 再実行 / TOPLOC LSH) | ⏳ 大 (実推論エンジン自体が未実装) | — |
 | BDHKE 実装 (secp256k1、現状は unblinding プレースホルダ) | ⏳ 大・新規依存要 (この環境では crates.io 制約で実施不能と判明) | — |
 | 永続化の WAL 化 (現状は動詞末尾のチェックポイントのみ) | ⏳ 中 | — |
 | CI 有効化 (`.github/workflows/` への移動) | ⏳ 要ユーザー判断 (secrets アクセス) | — |
 | `RegionConstraint` 配線 (プロバイダ地域メタ必要) | ⏳ 保留 | — |
+| proof-of-capability/reputation サブシステムが `rope pair` から呼ばれない (問㉓⑤) | ⏳ 要判断 (削除 or 結線) | — |
 
 ### ソクラテス式問答 Round 5 — ecash.rs の 3 欠陥
 

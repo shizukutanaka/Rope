@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-07-01
+
+ソクラテス式問答法で機能の過不足を検証。「TEE ルーティング修正 (v0.2.6) は同じ
+根本原因を持つ兄弟分岐すべてに一貫適用されたか？」を問うたところ、修正が不十分
+だったことが判明した。
+
+### Fixed
+
+#### `select_provider` の非TEE分岐も実ピア状態を無視していた (v0.2.6 の修正漏れ)
+- v0.2.6 で `Privacy::ConfidentialCompute` (TEE) 分岐のみ `ConfidentialManager` の
+  実状態を参照するよう修正したが、同一関数内の他の `FederatedPeer` 分岐
+  (`EnergyPreference::MinimizeWatts`, `RenewableOnly`/`PreferRenewable`,
+  `OnDevicePreferred`/`FederatedOnly` の一般ケース) は `"low-energy-peer"`,
+  `"renewable-peer"`, `"peer-1"` という固定文字列を返し続けていた —
+  `rope pair` が実際に発見・ペアした `PairManager.paired` を一切参照しない、
+  TEE分岐と全く同じ欠陥パターン
+- `IntentManager::resolve()` が `Option<&PairManager>` も受け取るように変更。
+  `pick_federated_peer()` ヘルパーを新設し、実ペアリング済みピアがあればその ID へ
+  ルーティング、無ければ trust_score=0.0 の番兵値を返す (TEE分岐と統一された規約)
+- `check_feasibility` の TEE 専用チェックを、`ProviderChoice::FederatedPeer` の
+  `trust_score <= 0.0` を検出する一般ルールへ統合。TEE/非TEE 両方の
+  「委任先ピアが見つからない」ケースを1箇所で確実に infeasible にする
+  (メッセージは文脈に応じて TEE 向け/一般向けを出し分け)
+- 回帰テスト2件追加 (ペアリング済みピア無しで infeasible / 実ピアへ正しくルーティング)
+
+### Changed
+- テスト計 236 (default) / 242 (`--features http`)
+
+### Known Limitations (今回のソクラテス式問答で判明、未対応)
+- `pair.rs` の proof-of-capability / reputation サブシステム
+  (`CapabilityChallenge`, `issue_pow_challenge`, `verify_capability_proof`,
+  `reputation_score` 等、約300行) はテストで検証済みだが、`rope pair` からの
+  呼び出しがゼロ — 完全に到達不能な状態。プロジェクト自身の「約束されてない機能の
+  ためにスロットを残さない」哲学と緊張関係にある。削除するか `rope pair` に
+  結線するか、次回判断が必要
+- `intent::RegionConstraint` は宣言・デフォルト設定のみで、resolver のどこからも
+  参照されない dead field のまま (プロバイダの地域メタデータ基盤が無いため)
+- `net::cashu_mint` に `melt()` 相当の関数は名前空間にすら存在しない
+  (「未実装」ではなく「スタブすら無い」— より正確な記述)
+
 ## [0.2.6] - 2026-07-01
 
 ### Fixed
