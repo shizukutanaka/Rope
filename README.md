@@ -29,8 +29,14 @@ My thanks ride on light.
 
 ## インストール
 
+`crates.io` 上で `rope` という名前は既に別プロジェクト (無関係な文字列データ構造の
+"rope"、yanked 済み) に使われているため `cargo install rope` は使えない
+(名前は再利用不可)。ソースからビルドする:
+
 ```bash
-cargo install rope
+git clone https://github.com/shizukutanaka/rope.git
+cd rope
+cargo install --path .
 ```
 
 初回実行:
@@ -98,10 +104,10 @@ rope earn             # 自分の GPU を貸し出す
 
 ```
 モジュール:  7 core + 1 net  (旧 122、-93%)
-main.rs:     604 行 (旧 11,594、-95%)
-総 Rust:     11,702 行 (旧 ~75,600、-85%)
+main.rs:     607 行 (旧 11,594、-95%)
+総 Rust:     11,730 行 (旧 ~75,600、-85%)
 テスト:      232 (cargo test 実通過、ローカル確認。CI は未配線 — 後述)
-版:          0.2.4
+版:          0.2.5
 exit(1):     ロック競合・孤児セッション掃除失敗では出さない (v0.2.2 で graceful 化)。
              致命的 I/O 障害 (disk full 等) では正直に exit(1) + 原因表示。
 ```

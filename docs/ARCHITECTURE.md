@@ -8,7 +8,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  CLI (main.rs, 604 行)                              │
+│  CLI (main.rs, 607 行 — lib.rs 経由で下記を利用)      │
 │                                                     │
 │  rope          → first_run (wow moment)             │
 │  rope pair     → pair + session (mDNS / QR / Noise) │
@@ -55,7 +55,7 @@
 |-----------|-----:|------:|------|
 | **config** | 715 | 15 | 鍵生成 (Ed25519), 設定, ディレクトリ管理, プロセス間ロック |
 | **pair** | 2,480 | 47 | ピア発見 (mDNS/BT/QR/DHT), Noise XX/IK 握手, 信頼ストア, QR nonce リプレイ防止 |
-| **session** | 862 | 22 | セッション状態機械, verify code, panic stop, capability token |
+| **session** | 868 | 22 | セッション状態機械, verify code, panic stop, capability token |
 | **confidential** | 1,477 | 28 | TEE attestation (H100/H200/Blackwell), 暗号セッション, ポリシー鮮度検証 |
 | **intent** | 1,613 | 33 | Intent → ExecutionPlan 解決, 予算/遅延/プライバシー制約 |
 | **ecash** | 1,873 | 38 | Cashu NUT-00 proof, escrow (6状態), streaming (1秒単位) |
@@ -66,9 +66,15 @@
 | モジュール | 行数 | テスト | 責務 |
 |-----------|-----:|------:|------|
 | **cashu_mint** | 907 | 17 (http feature 有効時 23) | Cashu HTTP client (NUT-01/04/05/06/07), 翻訳層 (**未結線**: 呼び出し元ゼロ) |
-| **main.rs** | 604 | 13 | CLI 引数解析, 4 動詞ルーティング, 統合テスト |
 
-合計: 11,702 行, 232 テスト (default) / 238 テスト (`--features http`) (2026-07-01 時点、v0.2.3)
+### 統合層
+
+| ファイル | 行数 | テスト | 責務 |
+|---------|-----:|------:|------|
+| **lib.rs** | 15 | — | `core`/`net` を再エクスポートするライブラリクレート境界。examples/ 及び外部から `use rope::core::...` で利用可能 |
+| **main.rs** | 607 | 13 | CLI 引数解析, 4 動詞ルーティング, 統合テスト。`lib.rs` を経由して core/net を利用 |
+
+合計: 11,730 行, 232 テスト (default) / 238 テスト (`--features http`) (2026-07-01 時点、v0.2.5)
 
 ---
 
@@ -152,7 +158,8 @@ rope/
 ├── README.md
 ├── .gitignore
 ├── src/
-│   ├── main.rs         # CLI (604 行, 4 動詞)
+│   ├── main.rs         # CLI (607 行, 4 動詞。lib.rs 経由で core/net を利用)
+│   ├── lib.rs          # ライブラリクレート境界 (pub mod core; pub mod net;)
 │   ├── core/
 │   │   ├── mod.rs
 │   │   ├── config.rs

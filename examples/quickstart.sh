@@ -2,7 +2,9 @@
 set -e
 # rope 4 動詞クイックスタート
 #
-# 前提: cargo install rope 済み
+# 前提: `cargo install --path .` (ソースから) でインストール済み
+#       ("rope" は crates.io で既に別プロジェクトに使われているため
+#        cargo install rope では入手不可、README 参照)
 
 # 1. 初回起動 — 60 秒 wow moment
 #    鍵生成 → ピア発見 → TEE 検証 → haiku 表示

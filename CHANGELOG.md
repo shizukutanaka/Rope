@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-07-01
+
+### Fixed
+
+#### `examples/library_usage.rs` was 100% inert placeholder text
+- 全3フロー (pair/ecash/confidential) が丸ごとコメントアウトされた擬似コードで、
+  `cargo run --example library_usage` は "詳細は src/core/*.rs を参照" と
+  表示するだけの空実行だった。README は「core/ ライブラリ使用例」と謳っていたが、
+  実際にコピペで動くコードは一切無かった
+- **根本原因**: `Cargo.toml` に `[lib]` ターゲットが無く (`src/lib.rs` 不在)、
+  `core`/`net` は `main.rs` の private module としてのみ存在していた。
+  examples/ はパッケージの lib クレートしか import できないため、
+  lib ターゲットが無い限りこの例は**原理的に実コードを書けなかった**
+  (README が謳う「テスト・組み込み・外部ツール統合に最適」は、実際には
+  lib ターゲットが存在せず外部から embed 不可能だった)
+- 修正: `src/lib.rs` を新設し `pub mod core; pub mod net;` を宣言。
+  `main.rs` は `mod core; mod net;` (再宣言) ではなく `use rope::core;`
+  (import) に変更し、module tree の二重コンパイル・テスト二重実行を回避
+  (テスト総数は 232/238 のまま不変で確認済み)。`core::short()` を
+  `pub(crate)` → `pub` に昇格 (クレート境界を跨ぐため)。
+  `library_usage.rs` を実際に `cargo run --example` で動く実行可能コードへ
+  全面書き換え (assert 付き、3フローとも実際に mgr を操作)
+
+#### `cargo install rope` は実際には動かなかった
+- crates.io に **既に無関係な別プロジェクト** ("rope" という文字列データ構造、
+  yanked 済み、`github.com/epsilonz/rope.rs`) がこの名前を使用しており、
+  再利用不可能。README の最初の「インストール」手順が実際には機能しない
+  (もしくは無関係なパッケージを指す) 状態だった。ソースからの
+  `cargo install --path .` 手順に置換 (`README.md`, `examples/quickstart.sh`)
+
+### Changed
+- clippy が `SessionManager::new()` に `new_without_default` を新たに検出
+  (lib ターゲット新設により本当に public API になったため)。
+  `impl Default for SessionManager` を追加して解消
+
 ## [0.2.4] - 2026-07-01
 
 ドキュメントの実態不一致を対象にした監査。コード変更は無し。

@@ -17,5 +17,3 @@ Thumbs.db
 /data/
 *.bak
 
-# Legacy archive (352KB, development history only)
-docs/archive/LEGACY_main.rs.txt
