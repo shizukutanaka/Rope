@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-07-01
+
+ソクラテス式問答法を継続。前回 (v0.2.7) は「機能が足りない」側の発見だったが、
+今回は「機能が過剰」側 — 宣言されているが誰にも参照されない構造体・分岐を探索した。
+
+### Removed
+
+#### `ecash::LightningLink` — 完全に不活性な構造体
+- `EcashManager.lightning_links: Vec<LightningLink>` は 10 フィールドの Lightning
+  ノード情報 (pubkey, alias, 交換レート, 入出金履歴) を持つ構造体だったが、
+  **書き込み経路も読み込み経路も一切存在しなかった** (宣言・`Vec::new()` 初期化のみ、
+  push も read も無し)。`proof-of-capability` (pair.rs, v0.2.7 で既出) とは異なり、
+  テストすら無く、検証すらされていなかった純粋な死蔵データ。削除して確認:
+  旧バージョンで保存された `ecash.json` に残る `"lightning_links": [...]` キーは
+  serde が黙って無視するため、既存ユーザーの状態ファイルは問題なくロードできる
+  (実機で検証済み)
+
+### Changed
+- テスト計 236 (default) / 242 (`--features http`) — 変化なし (LightningLink を
+  参照するテストは元々存在しなかった)
+
+### Known Limitations (今回のソクラテス式問答で新たに判明)
+- `confidential::SecurityPolicy` / `add_policy` / `validate_against_policy`
+  (v0.2.2 で鮮度チェックを追加した箇所) も、`pair.rs` の proof-of-capability と
+  **全く同じパターン**で main.rs のどの動詞からも呼ばれていない。テストは充実して
+  いるが、ポリシーを実際に登録・適用するユーザー操作が存在しない。
+  1件だけなら偶然だが、2件目が見つかったことで「よく検証されているが
+  完全に到達不能なサブシステム」がこのコードベースの局所的パターンではなく
+  構造的な傾向であることが示唆される — 次回は削除/結線の判断をまとめて行うべき
+
 ## [0.2.7] - 2026-07-01
 
 ソクラテス式問答法で機能の過不足を検証。「TEE ルーティング修正 (v0.2.6) は同じ
