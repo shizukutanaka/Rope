@@ -435,6 +435,63 @@ impl EcashManager {
     // Wallet operations (Cashu protocol 要約)
     // ========================================================================
 
+    /// mint_id から Cashu keyset id (16 hex) を導出。
+    /// 本来は mint の `/v1/keys` から取得するが、pure state machine のため代用。
+    /// 実 mint 接続時 (net/cashu_mint.rs 翻訳層) で正しい keyset id に置換される。
+    fn derive_keyset_id(mint_id: &str) -> String {
+        let keyset_id: String = mint_id
+            .chars()
+            .filter(|c| c.is_ascii_hexdigit())
+            .take(16)
+            .collect();
+        if keyset_id.len() == 16 {
+            keyset_id
+        } else {
+            // mint_id が hex でない場合は decode 可能な 16 hex に変換
+            let mut s = String::new();
+            for b in mint_id.bytes().take(8) {
+                s.push_str(&format!("{:02x}", b));
+            }
+            s
+        }
+    }
+
+    /// 単一額面の proof を構築 (乱数 secret + BLAKE3 nullifier + placeholder C)。
+    /// `mint_tokens` (新規発行) と `lock_funds` (お釣り proof 生成) で共有。
+    fn build_proof(mint_id: &str, keyset_id: &str, amount: u64) -> Proof {
+        // 32 byte 乱数 secret (Cashu NUT-00 V4)
+        let mut secret_bytes = [0u8; 32];
+        use rand::RngCore;
+        rand::thread_rng().fill_bytes(&mut secret_bytes);
+        let secret = hex::encode(secret_bytes);
+
+        // BLAKE3(secret) で nullifier 計算 — 本物 hash、replay 検知に必要
+        let null_hash = blake3::hash(&secret_bytes);
+        let nullifier = hex::encode(&null_hash.as_bytes()[..32]);
+
+        // C (unblinded signature) は本来 mint が BDHHKE で計算する。
+        // pure state machine では deterministic placeholder を生成し、
+        // 実 mint 接続時 (net/cashu_mint.rs 翻訳層) で本物 C に置換する。
+        // 33 byte 圧縮 secp256k1 point 形式: 02/03 prefix + 32 byte x-coordinate
+        let c_bytes = blake3::hash(format!("C|{}|{}|{}", keyset_id, amount, secret).as_bytes());
+        let mut c_compressed = [0u8; 33];
+        c_compressed[0] = 0x02; // even-y prefix
+        c_compressed[1..33].copy_from_slice(&c_bytes.as_bytes()[..32]);
+        let c_hex = hex::encode(c_compressed);
+
+        Proof {
+            id: uuid::Uuid::now_v7().to_string(),
+            amount_sats: amount,
+            mint_id: mint_id.to_string(),
+            keyset_id: keyset_id.to_string(),
+            secret,
+            c: c_hex.clone(),
+            signature: c_hex,
+            nullifier,
+            created_at: Utc::now(),
+        }
+    }
+
     /// mint から ecash を発行 (LN 預入後に呼ぶ想定)
     pub fn mint_tokens(&mut self, mint_id: &str, amount_sats: u64) -> Result<Vec<Proof>> {
         let mint = self
@@ -448,61 +505,11 @@ impl EcashManager {
 
         // 2^n 分解 (Cashu 標準)
         let denominations = Self::decompose_powers_of_two(amount_sats);
-        let mut proofs = Vec::new();
-
-        // Cashu keyset id は本来 mint の `/v1/keys` から取得。
-        // 本実装は pure state machine のため、mint id の先頭 16 hex を keyset id として代用。
-        // 実 mint 接続時 (net/cashu_mint.rs 翻訳層) で正しい keyset id に置換される。
-        let keyset_id = mint_id
-            .chars()
-            .filter(|c| c.is_ascii_hexdigit())
-            .take(16)
-            .collect::<String>();
-        let keyset_id = if keyset_id.len() == 16 {
-            keyset_id
-        } else {
-            // mint_id が hex でない場合は decode 可能な 16 hex に変換
-            let mut s = String::new();
-            for b in mint_id.bytes().take(8) {
-                s.push_str(&format!("{:02x}", b));
-            }
-            s
-        };
-
-        for d in denominations {
-            // 32 byte 乱数 secret (Cashu NUT-00 V4)
-            let mut secret_bytes = [0u8; 32];
-            use rand::RngCore;
-            rand::thread_rng().fill_bytes(&mut secret_bytes);
-            let secret = hex::encode(secret_bytes);
-
-            // BLAKE3(secret) で nullifier 計算 — 本物 hash、replay 検知に必要
-            let null_hash = blake3::hash(&secret_bytes);
-            let nullifier = hex::encode(&null_hash.as_bytes()[..32]);
-
-            // C (unblinded signature) は本来 mint が BDHHKE で計算する。
-            // pure state machine では deterministic placeholder を生成し、
-            // 実 mint 接続時 (net/cashu_mint.rs 翻訳層) で本物 C に置換する。
-            // 33 byte 圧縮 secp256k1 point 形式: 02/03 prefix + 32 byte x-coordinate
-            let c_bytes = blake3::hash(format!("C|{}|{}|{}", keyset_id, d, secret).as_bytes());
-            let mut c_compressed = [0u8; 33];
-            c_compressed[0] = 0x02; // even-y prefix
-            c_compressed[1..33].copy_from_slice(&c_bytes.as_bytes()[..32]);
-            let c_hex = hex::encode(c_compressed);
-
-            let proof = Proof {
-                id: uuid::Uuid::now_v7().to_string(),
-                amount_sats: d,
-                mint_id: mint_id.to_string(),
-                keyset_id: keyset_id.clone(),
-                secret,
-                c: c_hex.clone(),
-                signature: c_hex,
-                nullifier,
-                created_at: Utc::now(),
-            };
-            proofs.push(proof);
-        }
+        let keyset_id = Self::derive_keyset_id(mint_id);
+        let proofs: Vec<Proof> = denominations
+            .into_iter()
+            .map(|d| Self::build_proof(mint_id, &keyset_id, d))
+            .collect();
 
         // wallet に追加
         let bucket = self
@@ -565,12 +572,20 @@ impl EcashManager {
     }
 
     /// 受信 proof を検証 (二重使用ブロック)
+    ///
+    /// 同一 nullifier がバッチ内で重複、または過去に受信済みの場合は二重加算を拒否する
+    /// (未記録だと同じ proof を 2 回渡すだけで残高が水増しされてしまう)。
     pub fn receive_proofs(&mut self, proofs: Vec<Proof>) -> Result<u64> {
         let mut received = 0u64;
+        let mut batch_nullifiers = std::collections::HashSet::new();
         for p in &proofs {
             if self.spent_nullifiers.contains(&p.nullifier) {
                 self.stats.double_spend_attempts_blocked += 1;
                 anyhow::bail!("二重使用検出: {}", p.nullifier);
+            }
+            if !batch_nullifiers.insert(p.nullifier.clone()) {
+                self.stats.double_spend_attempts_blocked += 1;
+                anyhow::bail!("二重使用検出 (同一バッチ内重複): {}", p.nullifier);
             }
             // mint 信頼度チェック
             let mint = self
@@ -582,6 +597,20 @@ impl EcashManager {
                 anyhow::bail!("mint 未検証");
             }
             received += p.amount_sats;
+        }
+
+        // 受信済み nullifier を記録 (再受信による残高水増しを防止)。
+        // 容量超過は sliding window 攻撃になるため即中断 (spend_proofs と同じ規律)。
+        for p in &proofs {
+            if !self
+                .spent_nullifiers
+                .record(p.nullifier.clone(), self.config.max_nullifier_history)
+            {
+                anyhow::bail!(
+                    "nullifier ストア満杯 (上限 {}) — max_nullifier_history を増やすか再起動してください",
+                    self.config.max_nullifier_history
+                );
+            }
         }
 
         // swap 推奨: 受信 proof を自分の mint で再発行して盗難耐性高める
@@ -684,23 +713,50 @@ impl EcashManager {
         Ok(escrow)
     }
 
-    /// escrow 内の資金を wallet から差し引く (実装簡略化: total 減額のみ)
+    /// escrow 内の資金を wallet から差し引く (実装簡略化: locked proof 自体は破棄)
+    ///
+    /// 旧実装は `locked >= amount_sats` に達するまで貪欲に proof を消費し、
+    /// オーバーシュート分 (例: [1,4] から 3 sats ロック時の 2 sats) を
+    /// `total_sats` から差し引かずに proof ごと破棄していたため、価値が消滅していた
+    /// (bucket からは 5 sats 相当が消えるが total_sats は 3 sats しか減らない)。
+    /// 本実装はオーバーシュート分を「お釣り」proof として bucket に戻し、
+    /// 消費額が常に `amount_sats` と正確に一致するようにする。
     fn lock_funds(&mut self, mint_id: &str, amount_sats: u64) -> Result<()> {
         let bucket = self
             .wallet
             .proofs_by_mint
             .get_mut(mint_id)
             .context("mint バケット無し")?;
+
+        let bucket_total: u64 = bucket.iter().map(|p| p.amount_sats).sum();
+        if bucket_total < amount_sats {
+            anyhow::bail!(
+                "この mint の proof 残高が不足しています ({} < {} sats)",
+                bucket_total,
+                amount_sats
+            );
+        }
+
         let mut locked = 0u64;
         let mut kept = Vec::new();
         for p in bucket.drain(..) {
             if locked < amount_sats {
                 locked += p.amount_sats;
-                // locked proof は escrow 側に保管 (簡略化: 破棄)
             } else {
                 kept.push(p);
             }
         }
+
+        // オーバーシュート分を 2^n 分解でお釣り proof として発行し bucket に戻す。
+        // bucket_total >= amount_sats を確認済みのため locked >= amount_sats は保証される。
+        let change = locked - amount_sats;
+        if change > 0 {
+            let keyset_id = Self::derive_keyset_id(mint_id);
+            for d in Self::decompose_powers_of_two(change) {
+                kept.push(Self::build_proof(mint_id, &keyset_id, d));
+            }
+        }
+
         *bucket = kept;
         self.wallet.total_sats = self.wallet.total_sats.saturating_sub(amount_sats);
         self.stats.current_balance_sats = self.wallet.total_sats;
@@ -1224,6 +1280,58 @@ mod tests {
         assert_eq!(m.stats.double_spend_attempts_blocked, 1);
     }
 
+    /// receive_proofs は受信 proof の nullifier を記録する。
+    /// 同一バッチ内で同じ proof が2回渡されても残高は1回分しか加算されない。
+    #[test]
+    fn test_receive_proofs_rejects_duplicate_within_batch() {
+        let mut m = EcashManager::default();
+        m.add_mint(test_mint("mint1")).unwrap();
+        m.trust_mint("mint1", MintTrust::Trusted).unwrap();
+
+        let proofs = m.mint_tokens("mint1", 1).unwrap();
+        let p = proofs[0].clone();
+
+        let mut receiver = EcashManager::default();
+        receiver.add_mint(test_mint("mint1")).unwrap();
+        receiver.trust_mint("mint1", MintTrust::Trusted).unwrap();
+
+        // 同じ proof を1回のバッチに2つ含める → 二重使用として拒否
+        let result = receiver.receive_proofs(vec![p.clone(), p]);
+        assert!(result.is_err(), "同一バッチ内の重複 proof は拒否されるべき");
+        assert_eq!(receiver.wallet.total_sats, 0, "拒否時は残高が加算されない");
+    }
+
+    /// 同じ proof を別々の receive_proofs 呼び出しで2回渡すと、
+    /// 2回目は nullifier 記録により二重使用として拒否される
+    /// (未記録だと同じ proof を渡すだけで残高が水増しされてしまう)。
+    #[test]
+    fn test_receive_proofs_rejects_replay_across_calls() {
+        let mut m = EcashManager::default();
+        m.add_mint(test_mint("mint1")).unwrap();
+        m.trust_mint("mint1", MintTrust::Trusted).unwrap();
+        let proofs = m.mint_tokens("mint1", 1).unwrap();
+        let p = proofs[0].clone();
+
+        let mut receiver = EcashManager::default();
+        receiver.add_mint(test_mint("mint1")).unwrap();
+        receiver.trust_mint("mint1", MintTrust::Trusted).unwrap();
+
+        let first = receiver.receive_proofs(vec![p.clone()]).unwrap();
+        assert_eq!(first, 1);
+        assert_eq!(receiver.wallet.total_sats, 1);
+
+        // 同じ proof を別呼び出しで再提示 → 拒否され、残高は変わらない
+        let result = receiver.receive_proofs(vec![p]);
+        assert!(
+            result.is_err(),
+            "既に受信済みの proof は再度加算されるべきでない"
+        );
+        assert_eq!(
+            receiver.wallet.total_sats, 1,
+            "リプレイ受信で残高が水増しされてはならない"
+        );
+    }
+
     /// 問⑪: SpentNullifiers は容量超過時に eviction せず overflow=true を立てる。
     /// eviction は sliding window 二重使用攻撃を生む。
     #[test]
@@ -1673,6 +1781,54 @@ mod tests {
         m.trust_mint("mint1", MintTrust::Trusted).unwrap();
         m.mint_tokens("mint1", 10).unwrap();
         assert!(m.open_escrow("j", "a", "b", "mint1", 100, "c").is_err());
+    }
+
+    /// lock_funds のオーバーシュート分は「お釣り」proof として保存され、価値が消滅しない。
+    /// 1000 sats を mint (2^n 分解 = [8,32,64,128,256,512]) してから 500 sats を escrow すると、
+    /// 保有 proof のどの厳密部分集合も 500 にならないため、旧実装は
+    /// [256,128,64,32,8]=488 を消費 (locked=488) してから 12 sats 分の proof を破棄しつつ
+    /// total_sats からは 500 引いていた — 12 sats が消滅するバグがあった。
+    /// 修正後は「お釣り」proof が bucket に戻り、bucket 実体の合計と total_sats が一致し続ける。
+    #[test]
+    fn test_lock_funds_overshoot_returns_change_not_destroyed() {
+        let mut m = EcashManager::default();
+        m.add_mint(test_mint("mint1")).unwrap();
+        m.trust_mint("mint1", MintTrust::Trusted).unwrap();
+        m.mint_tokens("mint1", 1000).unwrap();
+
+        let e = m
+            .open_escrow("job1", "pk-a", "pk-b", "mint1", 500, "c")
+            .unwrap();
+        assert_eq!(e.amount_sats, 500);
+
+        // total_sats の会計は正しい
+        assert_eq!(m.wallet.total_sats, 500);
+
+        // bucket 内 proof の実合計が total_sats と一致する (お釣りとして保存されている)
+        let bucket_total: u64 = m.wallet.proofs_by_mint["mint1"]
+            .iter()
+            .map(|p| p.amount_sats)
+            .sum();
+        assert_eq!(
+            bucket_total, m.wallet.total_sats,
+            "bucket 内 proof 合計が total_sats と食い違ってはならない (価値消滅の再発防止)"
+        );
+
+        // お釣り proof も 2^n 額面を維持している
+        for p in &m.wallet.proofs_by_mint["mint1"] {
+            assert!(
+                p.amount_sats.is_power_of_two(),
+                "お釣り proof も 2^n 額面であるべき: {}",
+                p.amount_sats
+            );
+        }
+
+        // お釣り proof は残高としてさらに escrow/spend に使える (死蔵しない)
+        let e2 = m
+            .open_escrow("job2", "pk-a", "pk-b", "mint1", 500, "c")
+            .unwrap();
+        assert_eq!(e2.amount_sats, 500);
+        assert_eq!(m.wallet.total_sats, 0);
     }
 
     /// mint_tokens(0) は空 proof 返却
