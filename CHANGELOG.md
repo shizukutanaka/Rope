@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-07-01
+
+### Fixed
+
+#### `intent::select_provider` が実 TEE 状態を一切参照しなかった (最重要・複数回のレビューで指摘)
+- 4 レビューラウンド (v0.2.2〜v0.2.5) で繰り返し指摘されていた設計ギャップを解消。
+  `Privacy::ConfidentialCompute` (機密計算) の provider 選択が、`ConfidentialManager`
+  の実 attestation 状態を一切見ずに固定のプレースホルダー peer
+  (`"tee-peer"`, trust_score=1.0) を常に返していた。ユーザーが自分の Intent に
+  `verification: Attested` を設定しさえすれば (実ピアの検証状態と無関係に)
+  `check_feasibility` を通過してしまい、検証済み TEE がゼロ個でも「feasible」な
+  実行計画が組めていた
+- `ConfidentialManager::freshest_verified_instance()` を新設 (Verified かつ
+  `attestation_interval_seconds` 以内の鮮度を持つインスタンスのみ返す —
+  `create_secure_session`/`validate_against_policy` と同一基準を共有)
+- `IntentManager::resolve()` が `Option<&ConfidentialManager>` を受け取るように変更。
+  `select_provider` は実インスタンスが見つかった場合のみそのピアへルーティングし、
+  無ければ trust_score=0.0 の番兵値を返す。`check_feasibility` 側でも独立に
+  「検証済み TEE 無し」を検出し infeasible にする (ルーティング層とフィージビリティ層で
+  二重に安全側へ倒す設計)
+- `rope run` に `--verification (none/attested/zk/full)` フラグを新設。
+  旧実装ではこの経路自体が CLI から到達不可能だった (常に verification=None の
+  既存ゲートで止まっていた) ため、新フラグを追加して実際に検証可能にした
+- 回帰テスト 4 件追加 (実 Verified TEE で feasible+正しい peer へルーティング /
+  TEE 無しで infeasible / attestation 期限切れで infeasible / 旧テストの是正)
+
+### Changed
+- テスト計 234 (default) / 240 (`--features http`)
+- clippy `--all-targets -- -D warnings` (両 feature) を完全クリーンに維持
+
+### Known Limitations (今回判明した環境制約)
+- **この実行環境では crates.io から新規依存パッケージを追加できない**:
+  エグレスポリシーが `static.crates.io` (実クレートダウンロード先) への接続を
+  403 で拒否する (`index.crates.io` のメタデータ取得は許可されている非対称な設定)。
+  これにより Cashu の本物の BDHKE (secp256k1) 実装や libp2p/snow による P2P 実結線は、
+  この環境では技術的に実施不能と判明した。将来これらに着手する場合は、
+  crates.io への完全なアクセスを持つ環境が必要
+
 ## [0.2.5] - 2026-07-01
 
 ### Fixed
