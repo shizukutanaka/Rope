@@ -34,6 +34,11 @@ pub struct PairManager {
     pub stats: PairStats,
     /// 進行中の能力証明チャレンジ
     pub pending_challenges: HashMap<String, CapabilityChallenge>,
+    /// 消費済み QR ペアリング nonce → その token の expires_at。
+    /// token 自体が期限切れになれば `is_expired()` が別途弾くため、
+    /// nonce 自身の保持も expires_at 到来まででよく、無限成長しない。
+    #[serde(default)]
+    pub seen_qr_nonces: HashMap<String, DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -47,6 +52,7 @@ impl Default for PairManager {
             config: PairConfig::default(),
             stats: PairStats::default(),
             pending_challenges: HashMap::new(),
+            seen_qr_nonces: HashMap::new(),
             updated_at: Utc::now(),
         }
     }
@@ -286,6 +292,8 @@ pub struct PairStats {
     pub qr_tokens_consumed: u64,
     pub qr_tokens_expired: u64,
     pub qr_hmac_rejections: u64,
+    #[serde(default)]
+    pub qr_nonce_replays_blocked: u64,
 }
 
 // ============================================================================
@@ -677,7 +685,7 @@ impl PairManager {
     /// 失敗モード:
     /// - 期限切れ → Expired エラー + stats 加算
     /// - HMAC 不一致 → HmacMismatch エラー + stats 加算
-    /// - nonce リプレイ → 既発見と重複、無視で通す
+    /// - nonce リプレイ (有効期限内に同じ QR を再提示) → 拒否 + stats 加算
     pub fn accept_pairing_token(
         &mut self,
         qr_string: &str,
@@ -694,6 +702,18 @@ impl PairManager {
             self.stats.qr_hmac_rejections += 1;
             anyhow::bail!("HMAC 不一致 — プロトコル不整合か改ざん");
         }
+
+        // 期限切れ nonce を掃除 (無限成長防止。token 自身の TTL に合わせて自然に縮む)
+        let now = Utc::now();
+        self.seen_qr_nonces
+            .retain(|_, expires_at| *expires_at > now);
+
+        if self.seen_qr_nonces.contains_key(&token.payload.nonce) {
+            self.stats.qr_nonce_replays_blocked += 1;
+            anyhow::bail!("nonce リプレイ検出 — この QR は既に使用済みです");
+        }
+        self.seen_qr_nonces
+            .insert(token.payload.nonce.clone(), token.payload.expires_at);
 
         let p = token.payload;
         let peer_id = self
@@ -1617,6 +1637,29 @@ mod tests {
         assert_eq!(peer.advertised_pubkey, "pk-alice");
         assert_eq!(peer.method, DiscoveryMethod::Direct);
         assert_eq!(alice.stats.qr_tokens_issued, 1);
+        assert_eq!(bob.stats.qr_tokens_consumed, 1);
+    }
+
+    #[test]
+    fn test_qr_nonce_replay_rejected() {
+        let mut alice = PairManager::default();
+        let mut bob = PairManager::default();
+        let secret = b"rope-v1-magic";
+
+        let token = alice
+            .create_pairing_token("pk-alice", test_endpoint(9001), test_caps(), secret, 60)
+            .unwrap();
+        let qr = token.to_qr_string().to_string();
+
+        // 1回目: 成功
+        bob.accept_pairing_token(&qr, secret).unwrap();
+        assert_eq!(bob.stats.qr_tokens_consumed, 1);
+
+        // 同じ QR (同じ nonce) を再提示 → リプレイとして拒否
+        let result = bob.accept_pairing_token(&qr, secret);
+        assert!(result.is_err(), "同じ nonce の再提示は拒否されるべき");
+        assert_eq!(bob.stats.qr_nonce_replays_blocked, 1);
+        // 拒否されたので consumed は増えない
         assert_eq!(bob.stats.qr_tokens_consumed, 1);
     }
 
