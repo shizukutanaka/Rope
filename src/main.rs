@@ -314,6 +314,7 @@ fn run_inference(
     use core::intent::{
         load_intent, save_intent, BudgetEnforcement, Intent, Privacy, VerificationLevel, Workload,
     };
+    use core::pair::load_pair;
 
     let privacy = match privacy_str {
         "any" => Privacy::AnyCompute,
@@ -367,7 +368,10 @@ fn run_inference(
     // 機密計算ルーティングの実ゲートに使う。読み込めなくても (未初期化含む)
     // None として渡し、安全側 (検証済み TEE 無し扱い) に倒す。
     let confidential = load_confidential().ok();
-    let plan = mgr.resolve(&intent_id, confidential.as_ref())?;
+    // 非TEE の federation ルーティングが `rope pair` で実際にペアリング済みの
+    // ピアを使うために渡す。無ければ (未ペアリング含む) 同様に安全側に倒れる。
+    let pair = load_pair().ok();
+    let plan = mgr.resolve(&intent_id, confidential.as_ref(), pair.as_ref())?;
 
     println!("⚙️  実行計画 ({})", core::short(&plan.id, 8));
     println!("  プロバイダ: {}", plan.selected_provider);
