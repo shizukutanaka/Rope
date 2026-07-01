@@ -291,6 +291,12 @@ pub struct SessionManager {
     start_time: Option<Instant>,
 }
 
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionManager {
     /// 新規マネージャー作成
     pub fn new() -> Self {

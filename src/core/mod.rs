@@ -40,6 +40,6 @@ pub mod session;
 ///
 /// `&s[..n]` のバイトスライスはマルチバイト境界に当たると panic する。
 /// ID は通常 ASCII だが、ピア名等に任意文字列が入りうるため共通化して防御する。
-pub(crate) fn short(s: &str, n: usize) -> String {
+pub fn short(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }

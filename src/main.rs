@@ -12,8 +12,11 @@
 // CI は RUSTFLAGS="-D warnings" のため、dead_code を許可しないとビルドが落ちる。
 #![allow(dead_code)]
 
-mod core;
-mod net;
+// core/net は src/lib.rs (rope ライブラリクレート) が所有する。
+// ここでは再宣言せず import するだけ — module tree の二重コンパイル
+// (テストの二重実行含む) を避けるため。net は現行 4 動詞からは未使用
+// (http 機能配下、v0.3 で結線) だが lib クレート経由で外部からは使える。
+use rope::core;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
