@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-07-01
+
+前回 (0.2.2) がカバーしなかった領域 (net/cashu_mint.rs の未結線 HTTP 翻訳層、
+session.rs/config.rs の再監査、ドキュメント整合性) を対象にした追加レビュー。
+
+### Fixed
+
+#### net::cashu_mint — NUT-07 wire format 不一致 (v0.3 結線時に即失敗するバグ)
+- **checkstate リクエスト/レスポンスのフィールド名が仕様と不一致**: 旧実装は
+  `{"secrets": [...]}` を送信し、レスポンスの proof 識別子を `secret` として
+  パースしていたが、現行 NUT-07 は `Ys` (リクエスト) / `Y` (レスポンス) —
+  各要素は `hash_to_curve(secret)` の結果であり生 secret ではない。
+  準拠 mint に接続すると 400 か state 不一致で二重使用検出が機能しなくなる
+  欠陥だった。wire field 名を仕様に合わせて修正 (`CheckStateRequest.ys`,
+  `ProofState.y`、共に `#[serde(rename)]` で正しい JSON key を維持)
+- **mint 応答の C (blind signature) が無検証で Proof に埋め込まれていた**:
+  `translate_signatures_to_proofs` は額面・keyset は検証済み (問⑲) だったが、
+  `sig.c_` の形式 (66 hex 文字、02/03 prefix の圧縮 secp256k1 point) は
+  未検証のままコピーしていた。空文字列や壊れた C を返す mint (バグ/悪意) が
+  下流に「妥当な署名」と誤認される Proof を生成できた。形式検証を追加
+
+### Changed
+- 回帰テスト **8 件追加** (NUT-07 wire field, C 形式検証, その他) —
+  テスト計 232 (default) / 238 (http feature)
+- `docs/ARCHITECTURE.md` の全モジュール行数・テスト数表を実測値へ再生成
+  (2026-04 時点の数値から大幅に乖離していた)
+- README の「exit(1): 0 コマンド」表記を実態に合わせて訂正。v0.2.2 で
+  graceful 化したのはロック競合・孤児セッション掃除失敗のみであり、
+  致命的 I/O 障害 (disk full 等) は引き続き正直に exit(1) する
+  (黙って成功したふりをする方が危険なため、これは意図した挙動)
+
+### Known Limitations (v0.3 スコープ — 今回も未対応、より正確に記載)
+- `intent::select_provider` の TEE ルーティングは実際の `ConfidentialManager` 状態を
+  参照せず、常にプレースホルダ peer を返す (コード内に "Seam: v0.3" として既存の記載あり)
+- `pair.rs` の discovery 層はピアの `advertised_pubkey` を自己申告のまま dedup キーに
+  使っており、実 Noise 暗号ハンドシェイクが結線されるまで pubkey squatting に対する
+  防御がない (実 P2P I/O 自体が v0.3 スコープ)
+- `net::cashu_mint` は `/v1/melt/bolt11` (NUT-05 実行) が未実装なだけでなく、
+  **unblinding が本物の BDHHKE ではない** (`translate_signatures_to_proofs` は
+  mint の blind signature `C'` をそのまま `Proof.c` に格納しており、実際の
+  ec point 減算による unblind 処理を行っていない — 依存追加ゼロ方針のため
+  secp256k1 演算を実装していない)。今回 wire format とレスポンス検証は修正したが、
+  これは「プロトコルとして繋がる」ことの前提整備であり、「暗号学的に正しい
+  Cashu token を生成する」ことは依然として v0.3 (secp256k1 依存追加) 待ち。
+  モジュール自体もどこからも呼び出されていない (未結線)
+
 ## [0.2.2] - 2026-07-01
 
 4 並列レビューエージェントによる全モジュール精査 (ecash/mint, intent/confidential,

@@ -98,11 +98,12 @@ rope earn             # 自分の GPU を貸し出す
 
 ```
 モジュール:  7 core + 1 net  (旧 122、-93%)
-main.rs:     574 行 (旧 11,594、-95%)
-総 Rust:     11,640 行 (旧 ~75,600、-85%)
-テスト:      230 (cargo test、CI green)
-版:          0.2.2
-exit(1):     0 コマンド (全 4 動詞 graceful exit)
+main.rs:     604 行 (旧 11,594、-95%)
+総 Rust:     11,702 行 (旧 ~75,600、-85%)
+テスト:      232 (cargo test、CI green)
+版:          0.2.3
+exit(1):     ロック競合・孤児セッション掃除失敗では出さない (v0.2.2 で graceful 化)。
+             致命的 I/O 障害 (disk full 等) では正直に exit(1) + 原因表示。
 ```
 
 ---
