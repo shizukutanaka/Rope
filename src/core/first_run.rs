@@ -480,7 +480,7 @@ impl<'a> FirstRunOrchestrator<'a> {
             &format!(
                 "{}  attestation OK ({})",
                 tee_type,
-                &report.id[..report.id.len().min(8)]
+                super::short(&report.id, 8)
             ),
             true,
         )?;
@@ -517,7 +517,7 @@ impl<'a> FirstRunOrchestrator<'a> {
         self.first_run.demo_intent_id = Some(intent.id.clone());
         self.first_run.transition(
             Stage::DemoIntentCreated,
-            &format!("Intent {} 構築完了", &intent.id[..intent.id.len().min(8)]),
+            &format!("Intent {} 構築完了", super::short(&intent.id, 8)),
             true,
         )?;
         Ok(intent)
@@ -681,10 +681,7 @@ pub fn format_welcome_letter(run: &FirstRun) -> String {
         out.push_str(&format!("\n🏗  提供元: {}\n", provider));
     }
     if let Some(intent_id) = &run.demo_intent_id {
-        out.push_str(&format!(
-            "📎 Intent: {}\n",
-            &intent_id[..intent_id.len().min(8)]
-        ));
+        out.push_str(&format!("📎 Intent: {}\n", super::short(intent_id, 8)));
     }
 
     out.push_str("\n次の 1 歩:\n");
