@@ -5,6 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-07-01
+
+4 並列レビューエージェントによる全モジュール精査 (ecash/mint, intent/confidential,
+pair/session, config/first_run/main) から新たに見つかった欠陥を修正。
+
+### Fixed
+
+#### 資金消滅バグ (ecash.rs)
+- **receive_proofs の二重加算** (問㉑): 受信した proof の nullifier を記録していなかった
+  ため、同一 proof を1バッチに2つ含める、または別呼び出しで再提示するだけで残高が
+  水増しされた。バッチ内重複検知 + nullifier 記録を追加
+- **lock_funds のオーバーシュート消滅** (問㉒): escrow/stream 開設時、2冪額面 proof が
+  target を超えて消費されると、超過分が `total_sats` から差し引かれずに proof ごと
+  破棄され価値が消滅していた (例: [1,4] proof から 3 sats ロックで 2 sats 消滅)。
+  超過分を「お釣り」proof として bucket に戻し、価値を保存するよう修正
+
+#### 契約違反: graceful exit(0) (main.rs)
+- **LockGuard 取得失敗が exit(1) を引き起こす**: `rope pair`/`rope run`/`rope earn` の
+  ロック取得失敗 (別プロセスが実行中、read-only fs 等) が `?` で伝播し、
+  「crash 絶対に出さない」という capability_boundary の方針に反して exit(1) していた。
+  友好的メッセージ表示後 graceful に exit(0) するよう修正
+- **prune_stale の I/O エラーが exit(1) を引き起こす**: セッションディレクトリ読取失敗
+  (権限変更、NFS 障害等) が非本質的操作にもかかわらず crash を引き起こしていた。
+  non-fatal 化 (警告表示のみで続行)
+
+#### セキュリティ強化
+- **QR ペアリング nonce のリプレイ未検出** (pair.rs): `PairingTokenPayload.nonce` は
+  生成されるが一度も照合されておらず、有効期限内であれば同じ QR を何度でも再提示できた。
+  期限に連動して自然に縮小する bounded nonce store を追加し、リプレイを拒否
+- **TEE attestation ポリシー検証の鮮度チェック抜け** (confidential.rs):
+  `validate_against_policy` は `create_secure_session` と異なり `last_attestation` の
+  鮮度を確認しておらず、`refresh_expired_attestations()` が呼ばれるまで期限切れの
+  attestation でもポリシーを通過できた。鮮度チェックを共通化し両経路で一貫させた
+
+#### 防御的堅牢化
+- ID 表示のバイトスライス切り詰め (`&s[..n.min(len)]`) を UTF-8 境界安全な
+  `core::short()` へ統一 (main.rs, confidential.rs, first_run.rs)。
+  現状は内部生成 UUID のみで実害は無いが、既存の同型バグ (問⑧⑨等) と同じ
+  パターンのため防御的に統一
+
+### Changed
+- 回帰テスト **7 件追加** (receive_proofs 二重加算×2、lock_funds 価値保存、
+  QR nonce リプレイ、attestation ポリシー鮮度) — テスト計 230 (default)
+- `mint_tokens`/`lock_funds` の proof 構築ロジックを `build_proof`/`derive_keyset_id`
+  へ共通化 (重複コード削減)
+- clippy `--all-targets -- -D warnings` を完全クリーンに維持
+- `cargo fmt --all -- --check` パス
+
+### Known Limitations (v0.3 スコープ — 今回は未対応)
+- `intent::select_provider` の TEE ルーティングは実際の `ConfidentialManager` 状態を
+  参照せず、常にプレースホルダ peer を返す (コード内に "Seam: v0.3" として既存の記載あり)
+- `pair.rs` の discovery 層はピアの `advertised_pubkey` を自己申告のまま dedup キーに
+  使っており、実 Noise 暗号ハンドシェイクが結線されるまで pubkey squatting に対する
+  防御がない (実 P2P I/O 自体が v0.3 スコープ)
+- `net::cashu_mint` の `/v1/melt/bolt11` (NUT-05 実行) は未実装、かつモジュール全体が
+  どこからも呼び出されていない (実 mint HTTP 接続は v0.3 スコープ)
+
 ## [0.2.1] - 2026-06-30
 
 ### Fixed
