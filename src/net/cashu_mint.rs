@@ -201,10 +201,13 @@ impl CashuClient {
     // NUT-07 — proof 状態確認 (二重使用検出)
     // ====================================================================
 
-    /// proof secret 群の状態を mint に問い合わせ
-    pub async fn check_state(&self, secrets: Vec<String>) -> Result<CheckStateResponse> {
+    /// proof の状態を mint に問い合わせる。
+    ///
+    /// `ys` は各 proof の `hash_to_curve(secret)` (secp256k1 point, hex 圧縮形式) —
+    /// 呼び出し元が生 secret ではなくこの変換済み値を渡す必要がある (NUT-07)。
+    pub async fn check_state(&self, ys: Vec<String>) -> Result<CheckStateResponse> {
         let url = self.endpoint("/v1/checkstate");
-        let req = CheckStateRequest { secrets };
+        let req = CheckStateRequest { ys };
         let resp = self
             .http
             .post(&url)
@@ -356,9 +359,17 @@ pub struct BlindSignature {
 }
 
 /// NUT-07 proof 状態確認
+///
+/// wire field は `Ys` — 各要素は `hash_to_curve(secret)` の結果 (secp256k1 point,
+/// hex 圧縮形式) であり、proof の生 `secret` そのものではない。旧実装は
+/// `{"secrets": [...]}` を送信しており、NUT-07 準拠 mint には 400 か
+/// state 不一致で拒否される (本モジュールは未結線の pure DTO 層のため実害無いが、
+/// v0.3 で結線する際は呼び出し元が hash_to_curve を実装して `ys` に渡す必要がある —
+/// 本実装は secp256k1 依存を追加しないため未実装のまま)。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckStateRequest {
-    pub secrets: Vec<String>,
+    #[serde(rename = "Ys")]
+    pub ys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -368,7 +379,9 @@ pub struct CheckStateResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProofState {
-    pub secret: String,
+    /// `hash_to_curve(secret)` の hex — proof の生 secret ではない (NUT-07)
+    #[serde(rename = "Y")]
+    pub y: String,
     /// UNSPENT / PENDING / SPENT
     pub state: String,
     pub witness: Option<String>,
@@ -473,6 +486,18 @@ pub fn translate_signatures_to_proofs(
                 "mint が別 keyset で署名: 期待 {} != 応答 {} (信頼境界違反)",
                 keyset_id,
                 sig.id
+            );
+        }
+        // C は 33 byte 圧縮 secp256k1 point (hex 66文字、02/03 prefix) の形を取る
+        // (Proof.c の doc comment 参照)。mint が空文字列や壊れた形の C' を返しても
+        // 無検証で Proof に埋め込むと、下流コードが「妥当な署名」と誤認する。
+        if sig.c_.len() != 66
+            || !(sig.c_.starts_with("02") || sig.c_.starts_with("03"))
+            || !sig.c_.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            anyhow::bail!(
+                "mint 応答の C が不正な形式: {} byte (66 byte hex, 02/03 prefix 必須)",
+                sig.c_.len()
             );
         }
         let secret_hex = hex::encode(secret_bytes);
@@ -653,16 +678,39 @@ mod tests {
 
     #[test]
     fn test_check_state_response_parse() {
+        // NUT-07: レスポンスの proof 識別子フィールドは `Y` (hash_to_curve(secret))
+        // であり `secret` ではない。
         let real = r#"{
             "states": [
-                {"secret": "s1", "state": "UNSPENT", "witness": null},
-                {"secret": "s2", "state": "SPENT", "witness": null}
+                {"Y": "02aa...", "state": "UNSPENT", "witness": null},
+                {"Y": "02bb...", "state": "SPENT", "witness": null}
             ]
         }"#;
         let r: CheckStateResponse = serde_json::from_str(real).unwrap();
         assert_eq!(r.states.len(), 2);
         assert_eq!(r.states[0].state, "UNSPENT");
         assert_eq!(r.states[1].state, "SPENT");
+        assert_eq!(r.states[0].y, "02aa...");
+    }
+
+    /// NUT-07: リクエストの wire field は `Ys` (secrets ではない)。
+    /// 旧実装は `{"secrets": [...]}` を送信しており、準拠 mint に拒否されていた。
+    #[test]
+    fn test_check_state_request_serializes_as_ys_not_secrets() {
+        let req = CheckStateRequest {
+            ys: vec!["02aa...".to_string()],
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(
+            json.contains("\"Ys\""),
+            "wire field は Ys であるべき: {}",
+            json
+        );
+        assert!(
+            !json.contains("\"secrets\""),
+            "旧い secrets field が残ってはならない: {}",
+            json
+        );
     }
 
     // ====================================================================
@@ -757,12 +805,14 @@ mod tests {
             BlindSignature {
                 amount: 2,
                 id: "keyset_aa".to_string(),
-                c_: "02aa".to_string(),
+                c_: "02aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+                    .to_string(),
             },
             BlindSignature {
                 amount: 64, // すり替え!
                 id: "keyset_aa".to_string(),
-                c_: "03bb".to_string(),
+                c_: "0311223344556677889900aabbccddeeff112233445566778899aabbccddeeff00"
+                    .to_string(),
             },
         ];
         let r = translate_signatures_to_proofs("m1", "keyset_aa", &secrets, &[2, 8], &sigs);
@@ -803,6 +853,22 @@ mod tests {
         // expected_amounts が 1 件しかない
         let r = translate_signatures_to_proofs("m", "k", &secrets, &[2], &sigs);
         assert!(r.is_err());
+    }
+
+    /// mint が空文字列や短い C' を返した場合、無検証で Proof に埋め込まず拒否する。
+    /// 旧実装は sig.c_ をそのまま Proof.c にコピーしており、mint のバグ/悪意で
+    /// 壊れた C を返されると下流が「妥当な署名」と誤認していた。
+    #[test]
+    fn test_translate_rejects_malformed_c() {
+        let (secrets, _) = build_blinded_outputs("k", &[2]);
+        let sigs = vec![BlindSignature {
+            amount: 2,
+            id: "k".to_string(),
+            c_: String::new(), // mint が空の C を返した
+        }];
+        let r = translate_signatures_to_proofs("m", "k", &secrets, &[2], &sigs);
+        assert!(r.is_err(), "空の C は拒否されるべき");
+        assert!(r.unwrap_err().to_string().contains("C"));
     }
 
     #[test]
