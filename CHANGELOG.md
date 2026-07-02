@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.10] - 2026-07-01
+
+前回 (v0.2.9) `SecurityPolicy` について「削除するか intent.rs に統合するか次回判断」
+と明記した宿題を実施。
+
+### Removed
+
+#### `confidential::SecurityPolicy` サブシステムを削除
+- `docs/RESEARCH_IMPROVEMENTS.md` にロードマップ記載が一切無く (`CapabilityChallenge`
+  との対比で確認済み)、`intent::IntentManager` の TEE feasibility ゲートと
+  同種の判定ロジックが重複していた。ロードマップの裏付けが無い以上「保持すべき
+  予約 API」の根拠が無く、削除を選択 (統合という選択肢は「Intent にポリシー ID
+  を持たせる」という新たなスキーマ拡張を要し、それを正当化する具体的な要求が
+  無いため見送り)
+- 削除対象: `SecurityPolicy` 構造体、`ConfidentialManager.policies` フィールド、
+  `add_policy`/`validate_against_policy` メソッド、関連テスト3件
+- 後方互換性を実機検証: 旧バージョンで保存された `confidential.json` に残る
+  `"policies": [...]` キーは serde が黙って無視するため問題なくロードできる
+
+### Changed
+- テスト計 233 (default) / 239 (`--features http`) (-3, 削除対象のテストごと除去)
+
 ## [0.2.9] - 2026-07-01
 
 前回 (v0.2.8) 「要判断」として持ち越した2件 (proof-of-capability, SecurityPolicy)

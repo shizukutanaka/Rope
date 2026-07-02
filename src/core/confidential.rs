@@ -28,8 +28,6 @@ pub struct ConfidentialManager {
     pub attestation_reports: Vec<AttestationReport>,
     /// セキュアセッション
     pub secure_sessions: Vec<SecureSession>,
-    /// ポリシー
-    pub policies: Vec<SecurityPolicy>,
     /// 設定
     pub config: ConfidentialConfig,
     /// 統計
@@ -44,7 +42,6 @@ impl Default for ConfidentialManager {
             tee_instances: Vec::new(),
             attestation_reports: Vec::new(),
             secure_sessions: Vec::new(),
-            policies: Vec::new(),
             config: ConfidentialConfig::default(),
             stats: ConfidentialStats::default(),
             updated_at: Utc::now(),
@@ -366,45 +363,6 @@ impl std::fmt::Display for EncryptionAlgorithm {
     }
 }
 
-/// セキュリティポリシー
-///
-/// **ステータス (問㉜)**: `CapabilityChallenge` (pair.rs) と異なり、この機能は
-/// `docs/RESEARCH_IMPROVEMENTS.md` のロードマップに一切記載が無く、
-/// `add_policy`/`validate_against_policy` は main.rs のどの動詞からも呼ばれない。
-/// さらに、`intent::IntentManager` の TEE feasibility ゲート
-/// (`ConfidentialManager::freshest_verified_instance`, v0.2.6) はこの機構を
-/// 使わず、独自に「Verified かつ鮮度内」だけをハードコードで判定している——
-/// 本来この判定はポリシー (min_security_level, allowed_tee_types 等) 込みで
-/// `validate_against_policy` に委譲する設計の方が一貫していたはずで、
-/// 現状は同種の判定が2箇所に分散している。次に触る際は
-/// (a) intent 側をポリシー経由に統合するか、(b) ロードマップに無い以上
-/// 削除するか、いずれかの判断を推奨する (このコメント自体は判断を下さない)。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SecurityPolicy {
-    /// ポリシーID
-    pub id: String,
-    /// 名前
-    pub name: String,
-    /// 説明
-    pub description: String,
-    /// 最小セキュリティレベル
-    pub min_security_level: SecurityLevel,
-    /// アテステーション必須
-    pub attestation_required: bool,
-    /// アテステーション有効期間（秒）
-    pub attestation_validity_seconds: u32,
-    /// 許可されたTEEタイプ
-    pub allowed_tee_types: Vec<TeeType>,
-    /// デバッグモード許可
-    pub allow_debug_mode: bool,
-    /// 最小TCBバージョン
-    pub min_tcb_version: Option<String>,
-    /// 作成日時
-    pub created_at: DateTime<Utc>,
-    /// 有効
-    pub enabled: bool,
-}
-
 /// Confidential Computing設定
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfidentialConfig {
@@ -720,8 +678,8 @@ impl ConfidentialManager {
     /// attestation が interval 内で鮮度を保っているか。
     ///
     /// `last_attestation` が無い (未 attest) 場合は鮮度なしとみなす。
-    /// `create_secure_session` / `refresh_expired_attestations` / `validate_against_policy`
-    /// の 3 箇所で同一基準を使うことで、鮮度チェックの抜け漏れを防ぐ (1 箇所修正で全箇所反映)。
+    /// `create_secure_session` / `refresh_expired_attestations` の両方で同一基準を
+    /// 使うことで、鮮度チェックの抜け漏れを防ぐ (1 箇所修正で全箇所反映)。
     /// free function (self を取らない): `&mut self.tee_instances` を走査しながらでも
     /// 借用衝突なく呼べる。
     fn attestation_is_fresh(instance: &TeeInstance, interval_seconds: u32) -> bool {
@@ -777,50 +735,6 @@ impl ConfidentialManager {
         self.updated_at = Utc::now();
 
         Ok(session)
-    }
-
-    /// ポリシーを追加
-    pub fn add_policy(&mut self, policy: SecurityPolicy) {
-        self.policies.push(policy);
-        self.updated_at = Utc::now();
-    }
-
-    /// ポリシーを検証
-    pub fn validate_against_policy(&self, instance: &TeeInstance, policy_id: &str) -> Result<bool> {
-        let policy = self
-            .policies
-            .iter()
-            .find(|p| p.id == policy_id)
-            .context("ポリシー無し")?;
-
-        if !policy.enabled {
-            return Ok(true);
-        }
-
-        // セキュリティレベルチェック
-        if instance.security_level < policy.min_security_level {
-            return Ok(false);
-        }
-
-        // TEEタイプチェック
-        if !policy.allowed_tee_types.is_empty()
-            && !policy.allowed_tee_types.contains(&instance.tee_type)
-        {
-            return Ok(false);
-        }
-
-        // アテステーションチェック
-        // 問: Verified ステータスだけでは refresh_expired_attestations() が呼ばれる
-        // までキャッシュが古いまま残りうる (create_secure_session と同じ穴)。
-        // 鮮度も直接確認することで、ポリシー検証の抜け道を塞ぐ。
-        if policy.attestation_required
-            && (instance.attestation_status != AttestationStatus::Verified
-                || !Self::attestation_is_fresh(instance, self.config.attestation_interval_seconds))
-        {
-            return Ok(false);
-        }
-
-        Ok(true)
     }
 
     /// 期限切れアテステーションを更新
@@ -1074,50 +988,6 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("期限切れ"));
     }
 
-    /// validate_against_policy は create_secure_session と同じ鮮度基準を使う。
-    /// status が Verified のまま残っていても、last_attestation が期限切れなら
-    /// attestation_required なポリシーは拒否すべき (直接呼び出し経路の抜け道防止)。
-    #[test]
-    fn test_validate_against_policy_rejects_stale_attestation() {
-        let mut m = ConfidentialManager::default();
-        let inst =
-            m.create_tee_instance("gpu-1", "H100", TeeType::NvidiaGpuTee, SecurityLevel::High);
-        m.perform_attestation(&inst.id).unwrap();
-
-        m.add_policy(SecurityPolicy {
-            id: "p".to_string(),
-            name: "p".to_string(),
-            description: "".to_string(),
-            min_security_level: SecurityLevel::Standard,
-            attestation_required: true,
-            attestation_validity_seconds: 3600,
-            allowed_tee_types: vec![],
-            allow_debug_mode: false,
-            min_tcb_version: None,
-            created_at: Utc::now(),
-            enabled: true,
-        });
-
-        // 直後は Verified かつ新鮮 → 通る
-        let fresh = m.tee_instances.iter().find(|i| i.id == inst.id).unwrap();
-        assert!(m.validate_against_policy(fresh, "p").unwrap());
-
-        // last_attestation を期限切れに巻き戻す (status は Verified のまま)
-        let interval = m.config.attestation_interval_seconds as i64;
-        m.tee_instances
-            .iter_mut()
-            .find(|i| i.id == inst.id)
-            .unwrap()
-            .last_attestation = Some(Utc::now() - chrono::Duration::seconds(interval + 1));
-
-        let stale = m.tee_instances.iter().find(|i| i.id == inst.id).unwrap();
-        assert_eq!(stale.attestation_status, AttestationStatus::Verified);
-        assert!(
-            !m.validate_against_policy(stale, "p").unwrap(),
-            "期限切れ attestation はポリシー検証を通過してはならない"
-        );
-    }
-
     /// 問⑰: detect_replay_anomaly の窓が attestation_interval に合わせて拡張される。
     /// 小さいインターバル設定 (2s) で 5 回実行すると 2 秒窓で全件検出される。
     #[test]
@@ -1154,41 +1024,6 @@ mod tests {
     }
 
     #[test]
-    fn test_policy_validation() {
-        let mut manager = ConfidentialManager::default();
-
-        let instance = manager.create_tee_instance(
-            "gpu-001",
-            "H100",
-            TeeType::NvidiaGpuTee,
-            SecurityLevel::Standard,
-        );
-
-        manager.perform_attestation(&instance.id).unwrap();
-
-        manager.add_policy(SecurityPolicy {
-            id: "policy-001".to_string(),
-            name: "High Security".to_string(),
-            description: "Requires high security level".to_string(),
-            min_security_level: SecurityLevel::High,
-            attestation_required: true,
-            attestation_validity_seconds: 3600,
-            allowed_tee_types: vec![TeeType::NvidiaGpuTee],
-            allow_debug_mode: false,
-            min_tcb_version: None,
-            created_at: Utc::now(),
-            enabled: true,
-        });
-
-        // Standardレベルなのでポリシー違反
-        let instance = &manager.tee_instances[0];
-        let valid = manager
-            .validate_against_policy(instance, "policy-001")
-            .unwrap();
-        assert!(!valid);
-    }
-
-    #[test]
     fn test_tee_type_supports_gpu() {
         assert!(TeeType::NvidiaGpuTee.supports_gpu());
         assert!(!TeeType::IntelSgx.supports_gpu());
@@ -1211,38 +1046,6 @@ mod tests {
 
         let updated = m.tee_instances.iter().find(|i| i.id == inst.id).unwrap();
         assert_eq!(updated.attestation_status, AttestationStatus::Verified);
-    }
-
-    #[test]
-    fn test_high_security_policy_passes_for_h100() {
-        let mut m = ConfidentialManager::default();
-        let inst =
-            m.create_tee_instance("gpu-1", "H100", TeeType::NvidiaGpuTee, SecurityLevel::High);
-        m.perform_attestation(&inst.id).unwrap();
-
-        m.add_policy(SecurityPolicy {
-            id: "p-high".to_string(),
-            name: "High".to_string(),
-            description: "".to_string(),
-            min_security_level: SecurityLevel::High,
-            attestation_required: true,
-            attestation_validity_seconds: 3600,
-            allowed_tee_types: vec![TeeType::NvidiaGpuTee],
-            allow_debug_mode: false,
-            min_tcb_version: None,
-            created_at: Utc::now(),
-            enabled: true,
-        });
-
-        // Re-fetch the verified instance
-        let inst = m
-            .tee_instances
-            .iter()
-            .find(|i| i.id == inst.id)
-            .unwrap()
-            .clone();
-        let ok = m.validate_against_policy(&inst, "p-high").unwrap();
-        assert!(ok);
     }
 
     #[test]
