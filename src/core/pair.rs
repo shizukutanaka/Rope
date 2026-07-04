@@ -70,8 +70,6 @@ pub enum DiscoveryMethod {
     Dht,
     /// 直接URL指定 (手動)
     Direct,
-    /// 連絡先経由 (友人リスト)
-    Contact,
 }
 
 /// 発見されたピア (まだ握手してない)
@@ -126,6 +124,13 @@ pub struct PairedPeer {
 }
 
 /// 信頼度
+///
+/// **ステータス**: `OwnDevice` は `is_capability_proven_or_trusted` で意味のある
+/// 判定分岐として使われているが、これを実際に代入する仕組み (複数デバイス間の
+/// アカウント/アイデンティティ紐付け) は未実装のため、現状は常に false 相当の
+/// デッドブランチ。`StreamState::Opening/Paused/Closing` (削除済み) とは異なり、
+/// この判定自体は将来の own-device リンク機能の自然な受け皿として意味があるため
+/// 保持する — 削除対象ではなく「未結線の判定分岐」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TrustLevel {

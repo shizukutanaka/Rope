@@ -328,6 +328,15 @@ pub struct SecureSession {
 }
 
 /// セッションステータス
+///
+/// **ステータス**: `create_secure_session` は `Establishing` のみ代入し、
+/// `Active`/`Suspended`/`Terminated` へ遷移させる箇所が無い。`update_stats()`
+/// の `active_sessions` カウントはこのため常に 0 になる。ただし `TeeStatus::Running`
+/// (v0.2.11 で修正) とは異なり、こちらは attestation 成否のような自己完結した
+/// ローカル判定では埋められない — 「セッションが実際に GPU 計算トラフィックを
+/// 暗号化中か」は実 TEE セッション確立 (v0.3, Noise 実結線と同じ性質の未実装)
+/// が無ければ判定不能。同日修正可能な結線漏れではなく、意図的に留保された
+/// 状態遷移として記録する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionStatus {

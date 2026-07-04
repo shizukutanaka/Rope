@@ -303,13 +303,15 @@ pub struct StreamSession {
 }
 
 /// streaming 状態
+///
+/// 旧実装は `Opening`/`Paused`/`Closing` も宣言していたが、`open_stream` は常に
+/// 直接 `Active` を生成し、`close_stream` は直接 `Closed` に遷移し、
+/// pause/resume に相当する操作は存在しない。実際に使われる3状態のみに削減
+/// (死蔵面監査、ロードマップ記載なし — 使われない遷移中状態を削除)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamState {
-    Opening,
     Active,
-    Paused,
-    Closing,
     Closed,
     /// 異常終了 (ネット断、受取側応答なし)
     Stalled,
