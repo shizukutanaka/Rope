@@ -78,15 +78,18 @@
 | **`TeeStatus::Running` 未代入バグ (期限切れ再検証が機能不全)** | ✅ 改良済 | `f2ce715` |
 | **死蔵フィールド5件削除 (Intent.tags/duration, JobSpec, ConfidentialStats×2, FirstRun×2)** | ✅ 改良済 | `281ee2e` |
 | **`RegionConstraint` の doc comment 明記 (ロードマップ裏付けあり、保持)** | ✅ 改良済 | `281ee2e` |
-| **`EcashStats.current_balance_sats` 冗長ミラー削除** | ✅ 改良済 | (this) |
-| **write-only lifetime カウンタ3件を表示配線 (delete-or-wire の wire 判定例)** | ✅ 改良済 | (this) |
+| **`EcashStats.current_balance_sats` 冗長ミラー削除** | ✅ 改良済 | `f025b3c` |
+| **write-only lifetime カウンタ3件を表示配線 (delete-or-wire の wire 判定例)** | ✅ 改良済 | `f025b3c` |
+| **`StreamState::Opening/Paused/Closing` 削除 (構築経路ゼロ)** | ✅ 改良済 | (this) |
+| **`DiscoveryMethod::Contact` 削除 (構築経路ゼロ)** | ✅ 改良済 | (this) |
+| **`TrustLevel::OwnDevice` の doc comment 明記 (未結線の判定分岐、保持)** | ✅ 改良済 | (this) |
+| **`SessionStatus` の doc comment 明記 (v0.3 実TEEセッション待ち、保持)** | ✅ 改良済 | (this) |
 | NAT 越え (libp2p DCUtR) / Noise 実結線 | ⏳ 大・新規依存要 (この環境では crates.io 制約で実施不能と判明) | — |
 | 検証本体 (VeriLLM 風 再実行 / TOPLOC LSH) | ⏳ 大 (実推論エンジン自体が未実装) | — |
 | BDHKE 実装 (secp256k1、現状は unblinding プレースホルダ) | ⏳ 大・新規依存要 (この環境では crates.io 制約で実施不能と判明) | — |
 | 永続化の WAL 化 (現状は動詞末尾のチェックポイントのみ) | ⏳ 中 | — |
 | CI 有効化 (`.github/workflows/` への移動) | ⏳ 要ユーザー判断 (secrets アクセス) | — |
 | pair.rs QR/TOFU 系統計7件の表示配線 (診断情報過多の懸念、見送り) | ⏳ 次回判断 | — |
-| Tier 3 未構築 enum variant の整理 (StreamState/DiscoveryMethod/TrustLevel/SessionStatus) | ⏳ 次回ロードマップ照合 | — |
 
 ### ソクラテス式問答 Round 5 — ecash.rs の 3 欠陥
 

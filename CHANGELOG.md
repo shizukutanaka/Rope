@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.13] - 2026-07-01
+
+v0.2.11/v0.2.12 で記録した Tier 3 (未構築 enum variant) の判断を実施。
+enum variant の削除は struct field 削除と異なり後方互換性のリスク種別が違う
+(未知フィールドは serde が無視するが、未知の enum 値は deserialize 失敗しうる) —
+今回は全対象について「構築経路が一切存在しない」ことを確認済みのため、
+実データがその値を持ちうるケースは無く安全と判断した。
+
+### Removed
+
+- `ecash::StreamState::{Opening, Paused, Closing}` — `open_stream` は常に直接
+  `Active` を生成し、`close_stream` は直接 `Closed` に遷移する。pause/resume に
+  相当する操作 (`pause_stream`/`resume_stream` 等) はそもそも存在しない。
+  実際に使われる `Active`/`Closed`/`Stalled` の3値のみに削減
+- `pair::DiscoveryMethod::Contact` — 比較・代入ともにゼロ。`AcceptMode::
+  ContactsOnly` (「連絡先のみ」受付) は `trust_store` メンバーシップで判定して
+  おり、この variant とは無関係だった
+
+### Kept, documented — 「未結線の判定分岐」であり削除対象ではない
+
+- `pair::TrustLevel::OwnDevice` — `is_capability_proven_or_trusted` で意味のある
+  判定に使われているが、これを代入する仕組み (複数デバイス間のアイデンティティ
+  紐付け) が無いため常にデッドブランチ。判定ロジック自体は将来の own-device
+  リンク機能の自然な受け皿として妥当なため保持、doc comment でステータスを明記
+- `confidential::SessionStatus::{Active, Suspended, Terminated}` —
+  `create_secure_session` は `Establishing` のみ代入し、以降の遷移が無いため
+  `update_stats().active_sessions` は常に 0。`TeeStatus::Running` (v0.2.11 で
+  修正) と異なり、これは「実 TEE セッション確立」という v0.3 実 I/O 結線を
+  待つ性質の未実装であり、同日修正可能な結線漏れではない — doc comment で
+  区別を明記
+
+### Changed
+- テスト計 238 (default) / 244 (`--features http`) — 変化なし
+  (削除対象 variant を参照するテストは元々存在せず)
+
 ## [0.2.12] - 2026-07-01
 
 v0.2.11 で記録した Tier 2 (write-only 統計値) の追跡調査。今回は「削除」と
