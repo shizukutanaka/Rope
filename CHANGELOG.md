@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.12] - 2026-07-01
+
+v0.2.11 で記録した Tier 2 (write-only 統計値) の追跡調査。今回は「削除」と
+「表示配線」の両方が該当する具体例を発見し、それぞれの判断基準に従って処理した。
+
+### Removed
+
+#### `ecash::EcashStats.current_balance_sats` — `wallet.total_sats` の冗長ミラー
+- 7 箇所の書込みサイトで `self.wallet.total_sats` をミラーしていたが、
+  `format_ecash` を含めどこからも読まれない。しかも `format_ecash` は
+  常に `wallet.total_sats` を直接表示しており、このミラーは同期ズレのリスクを
+  負うだけで一切の価値を生んでいなかった。削除して7箇所の同期コードを除去
+
+### Changed — write-only だった lifetime カウンタを表示に配線
+
+`current_balance_sats` とは異なり、以下は個別の意味を持つ実データ
+(単純なミラーではない) であるにもかかわらず表示されていなかったため、
+削除ではなく `format_pair`/`format_ecash` への配線を選択:
+
+- `pair::PairStats.total_handshakes_attempted` — `total_handshakes_succeeded`
+  + `total_handshakes_failed` とは別に「開始されたが未解決」を捕捉できる値
+- `pair::PairStats.total_peers_ever_paired` — 現在ペア数 (`currently_paired`)
+  とは別の lifetime カウント
+- `ecash::EcashStats.total_streams_opened` — escrow 同様の lifetime 開設数
+  (streams は現在 `active` 数のみ表示していた)
+
+回帰テスト2件追加 (`format_pair`/`format_ecash` が実際にこれらの値を含むこと)。
+
+### Deferred (今回は対応せず、記録のみ)
+- `pair::PairStats` の QR/TOFU 系フィールド (`tofu_accepts`,
+  `pubkey_mismatch_rejections`, `qr_tokens_issued/consumed/expired`,
+  `qr_hmac_rejections`, `qr_nonce_replays_blocked`) — テストでは検証済みだが
+  `format_pair` 未表示。7個をまとめて表示に追加すると diagnostics 向けの
+  情報がユーザー向けダッシュボードを圧迫する懸念があり、今回は見送り
+- Tier 3 (未構築 enum variant: `StreamState::Opening/Paused/Closing`,
+  `DiscoveryMethod::Contact`, `TrustLevel::OwnDevice`,
+  `SessionStatus::Suspended/Terminated`) — 次回ロードマップ照合の上で判断
+
+### Changed
+- テスト計 238 (default) / 244 (`--features http`)
+
 ## [0.2.11] - 2026-07-01
 
 全モジュール網羅の死蔵面監査 (Explore agent による Tier 1〜4 分類) を実施し、
