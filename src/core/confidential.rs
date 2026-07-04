@@ -410,12 +410,8 @@ pub struct ConfidentialStats {
     pub total_attestations: u64,
     /// 成功アテステーション
     pub successful_attestations: u64,
-    /// 失敗アテステーション
-    pub failed_attestations: u64,
     /// アクティブセッション
     pub active_sessions: u32,
-    /// 暗号化データ量（GB）
-    pub encrypted_data_gb: f64,
 }
 
 impl ConfidentialManager {
@@ -519,6 +515,16 @@ impl ConfidentialManager {
             AttestationStatus::Verified
         } else {
             AttestationStatus::Failed
+        };
+        // TeeStatus::Running は refresh_expired_attestations/active_tee_count/
+        // update_stats の 3 箇所で比較されるが、旧実装はここで一度も代入しておらず
+        // Initializing のまま固定されていた。結果、active カウントは常に 0、
+        // かつ refresh_expired_attestations の `if status != Running { continue }`
+        // ガードが全インスタンスをスキップし続け、期限切れ再検証が機能していなかった。
+        instance.status = if success {
+            TeeStatus::Running
+        } else {
+            TeeStatus::Error
         };
         instance.last_attestation = Some(Utc::now());
 
@@ -1068,6 +1074,82 @@ mod tests {
     fn test_unknown_instance_attestation_fails() {
         let mut m = ConfidentialManager::default();
         assert!(m.perform_attestation("nope").is_err());
+    }
+
+    /// 旧実装は perform_attestation が TeeStatus::Running を一度も代入しておらず、
+    /// インスタンスは作成時の Initializing のまま固定されていた。
+    /// これは単なる死蔵フィールドではなく機能バグ: active_tee_count() が常に 0 を返し、
+    /// refresh_expired_attestations() の `if status != Running { continue }` ガードが
+    /// 全インスタンスをスキップし続けるため、期限切れ再検証が機能していなかった。
+    #[test]
+    fn test_successful_attestation_sets_status_running() {
+        let mut m = ConfidentialManager::default();
+        let inst =
+            m.create_tee_instance("gpu-1", "H100", TeeType::NvidiaGpuTee, SecurityLevel::High);
+        assert_eq!(inst.status, TeeStatus::Initializing);
+        assert_eq!(m.active_tee_count(), 0);
+
+        m.perform_attestation(&inst.id).unwrap();
+
+        let updated = m.tee_instances.iter().find(|i| i.id == inst.id).unwrap();
+        assert_eq!(
+            updated.status,
+            TeeStatus::Running,
+            "attestation 成功後は Running であるべき"
+        );
+        assert_eq!(
+            m.active_tee_count(),
+            1,
+            "active_tee_count は実際に稼働中のインスタンスを反映すべき"
+        );
+    }
+
+    /// attestation 失敗時は TeeStatus::Error になり、active カウントに含まれない。
+    #[test]
+    fn test_failed_attestation_sets_status_error() {
+        let mut m = ConfidentialManager::default();
+        // RTX 4090 は TEE 非対応 → attestation 失敗
+        let inst = m.create_tee_instance(
+            "gpu-1",
+            "RTX 4090",
+            TeeType::NvidiaGpuTee,
+            SecurityLevel::High,
+        );
+        let report = m.perform_attestation(&inst.id).unwrap();
+        assert!(!report.verification_result.success);
+
+        let updated = m.tee_instances.iter().find(|i| i.id == inst.id).unwrap();
+        assert_eq!(updated.status, TeeStatus::Error);
+        assert_eq!(m.active_tee_count(), 0);
+    }
+
+    /// TeeStatus::Running が正しく代入されるようになったことで、
+    /// refresh_expired_attestations が実際にインスタンスを処理できるようになった
+    /// (旧実装は status != Running ガードで全件スキップしていた)。
+    #[test]
+    fn test_refresh_expired_attestations_now_actually_processes_instances() {
+        let mut m = ConfidentialManager::default();
+        m.config.attestation_interval_seconds = 2;
+        let inst =
+            m.create_tee_instance("gpu-1", "H100", TeeType::NvidiaGpuTee, SecurityLevel::High);
+        m.perform_attestation(&inst.id).unwrap();
+
+        // 期限切れに巻き戻す
+        let interval = m.config.attestation_interval_seconds as i64;
+        m.tee_instances
+            .iter_mut()
+            .find(|i| i.id == inst.id)
+            .unwrap()
+            .last_attestation = Some(Utc::now() - chrono::Duration::seconds(interval + 1));
+
+        let refreshed = m.refresh_expired_attestations();
+        assert_eq!(
+            refreshed,
+            vec![inst.id.clone()],
+            "Running ステータスのインスタンスは refresh 対象に含まれるべき"
+        );
+        let updated = m.tee_instances.iter().find(|i| i.id == inst.id).unwrap();
+        assert_eq!(updated.attestation_status, AttestationStatus::Expired);
     }
 
     // ====================================================================
