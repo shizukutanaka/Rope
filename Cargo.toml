@@ -1,6 +1,6 @@
 [package]
 name = "rope"
-version = "0.2.10"
+version = "0.2.11"
 edition = "2021"
 rust-version = "1.75"  # async fn in trait (stabilized 1.75)
 authors = ["Rope Contributors"]

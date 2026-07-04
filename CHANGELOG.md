@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.11] - 2026-07-01
+
+全モジュール網羅の死蔵面監査 (Explore agent による Tier 1〜4 分類) を実施し、
+機能バグ1件の修正と、ロードマップ裏付けのない死蔵フィールド5件の削除を実施。
+
+### Fixed
+
+#### `TeeStatus::Running` が一度も代入されず、期限切れ再検証が機能していなかった
+- `TeeStatus::Running` は `refresh_expired_attestations`/`active_tee_count`/
+  `update_stats` の3箇所で比較されるが、`perform_attestation` はこれまで
+  `attestation_status` のみ更新し `status` フィールド自体は作成時の
+  `Initializing` のまま放置していた。結果:
+  - `active_tee_count()` は常に 0 を返していた (稼働中インスタンスがあっても)
+  - `refresh_expired_attestations()` の `if status != Running { continue }`
+    ガードが全インスタンスをスキップし続け、**期限切れ attestation の
+    自動検出が一度も機能していなかった**
+- 修正: `perform_attestation` 成功時に `status = TeeStatus::Running`、
+  失敗時に `status = TeeStatus::Error` を代入。回帰テスト3件追加
+
+### Removed — ロードマップ裏付けのない死蔵フィールド
+
+- `intent::Intent.tags: Vec<String>` — 読取り経路ゼロ
+- `intent::Intent.duration: Duration` + `Duration` 構造体一式 — 読取り経路ゼロ
+  (`max_seconds`/`deadline` とも)
+- `session::JobSpec` 構造体 — どこからも構築されない（テスト含めゼロ）
+- `confidential::ConfidentialStats.failed_attestations` — 一度もインクリメントされず
+- `confidential::ConfidentialStats.encrypted_data_gb` — 書込み・読取りともゼロ
+- `first_run::FirstRun.is_repeat_user` + `FirstRunConfig.remember_first_run` —
+  常にfalse固定/制御フラグ未読
+
+いずれも `ecash::LightningLink` (v0.2.8) / `confidential::SecurityPolicy` (v0.2.10)
+と同一パターン (書込み・読取り経路ゼロ、ロードマップ記載なし)。
+`intent::RegionConstraint` は同種の未読フィールドだが `docs/RESEARCH_IMPROVEMENTS.md`
+#13 に明示的統合計画があるため保持し、doc comment でステータスを明記。
+
+後方互換性を実機検証: intent.json/confidential.json/first_run.json それぞれに
+削除済みキーを注入し、いずれも「破損」リカバリを発火させず正常ロードすることを確認。
+
+### Changed
+- テスト計 236 (default) / 242 (`--features http`) (TeeStatus 回帰テスト+3、
+  削除対象フィールドを参照するテストは元々存在せず差引ゼロ)
+
 ## [0.2.10] - 2026-07-01
 
 前回 (v0.2.9) `SecurityPolicy` について「削除するか intent.rs に統合するか次回判断」

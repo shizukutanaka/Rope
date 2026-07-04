@@ -72,15 +72,18 @@
 | **`rope run --verification` フラグ新設** | ✅ 改良済 | `a33c7c3` |
 | **非TEE FederatedPeer 分岐も PairManager の実状態を無視 (問㉖、TEE修正の適用漏れ)** | ✅ 改良済 | `1618a40` |
 | **`ecash::LightningLink` 完全不活性構造体の削除 (問㉗)** | ✅ 改良済 | `b13b13a` |
-| **proof-of-capability の delete-or-keep 判断 (問㉛、ロードマップ有り→保持)** | ✅ 判定済 (保持、doc明記) | (this) |
-| **QR ペアリングが CLI 未結線な理由の検証 (問㉙㉚)** | ✅ 検証済 (バグではなく一貫した scope 境界と判定) | (this) |
-| **SecurityPolicy サブシステムの削除 (問㉜、ロードマップ無しと判定)** | ✅ 改良済 | (this) |
+| **proof-of-capability の delete-or-keep 判断 (問㉛、ロードマップ有り→保持)** | ✅ 判定済 (保持、doc明記) | `169b222` |
+| **QR ペアリングが CLI 未結線な理由の検証 (問㉙㉚)** | ✅ 検証済 (バグではなく一貫した scope 境界と判定) | `169b222` |
+| **SecurityPolicy サブシステムの削除 (問㉜、ロードマップ無しと判定)** | ✅ 改良済 | `e7144e8` |
+| **`TeeStatus::Running` 未代入バグ (期限切れ再検証が機能不全)** | ✅ 改良済 | (this) |
+| **死蔵フィールド5件削除 (Intent.tags/duration, JobSpec, ConfidentialStats×2, FirstRun×2)** | ✅ 改良済 | (this) |
+| **`RegionConstraint` の doc comment 明記 (ロードマップ裏付けあり、保持)** | ✅ 改良済 | (this) |
 | NAT 越え (libp2p DCUtR) / Noise 実結線 | ⏳ 大・新規依存要 (この環境では crates.io 制約で実施不能と判明) | — |
 | 検証本体 (VeriLLM 風 再実行 / TOPLOC LSH) | ⏳ 大 (実推論エンジン自体が未実装) | — |
 | BDHKE 実装 (secp256k1、現状は unblinding プレースホルダ) | ⏳ 大・新規依存要 (この環境では crates.io 制約で実施不能と判明) | — |
 | 永続化の WAL 化 (現状は動詞末尾のチェックポイントのみ) | ⏳ 中 | — |
 | CI 有効化 (`.github/workflows/` への移動) | ⏳ 要ユーザー判断 (secrets アクセス) | — |
-| `RegionConstraint` 配線 (プロバイダ地域メタ必要) | ⏳ 保留 | — |
+| Tier 2/3 write-only 統計値・未構築 enum variant の整理 (次回候補) | ⏳ 記録のみ (削除は次回判断) | — |
 
 ### ソクラテス式問答 Round 5 — ecash.rs の 3 欠陥
 
