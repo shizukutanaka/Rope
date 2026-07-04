@@ -59,8 +59,6 @@ pub struct FirstRun {
     pub demo_haiku: Option<String>,
     /// 設定
     pub config: FirstRunConfig,
-    /// 以前の `first_run` 実行記録 — 2回目以降はスキップ
-    pub is_repeat_user: bool,
 }
 
 impl FirstRun {
@@ -78,7 +76,6 @@ impl FirstRun {
             abort_reason: None,
             demo_haiku: None,
             config: FirstRunConfig::default(),
-            is_repeat_user: false,
         }
     }
 }
@@ -177,8 +174,6 @@ pub struct FirstRunConfig {
     pub demo_budget_sats: u64,
     /// 完了とみなす最大時間 (秒)
     pub wow_target_seconds: u32,
-    /// ユーザーが再実行した時 is_repeat_user を true にするか
-    pub remember_first_run: bool,
 }
 
 impl Default for FirstRunConfig {
@@ -201,7 +196,6 @@ impl Default for FirstRunConfig {
             ],
             demo_budget_sats: 100, // 1 サトシ未満の haiku = 約 $0.0005
             wow_target_seconds: 60,
-            remember_first_run: true,
         }
     }
 }

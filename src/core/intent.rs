@@ -49,12 +49,8 @@ pub struct Intent {
     pub energy: EnergyPreference,
     /// Geographic or regulatory constraints.
     pub region: RegionConstraint,
-    /// How long the intent is valid. Default: one hour.
-    pub duration: Duration,
     /// Verification requirements: do we need proof-of-execution?
     pub verification: VerificationLevel,
-    /// Free-form tags for user organization.
-    pub tags: Vec<String>,
     pub created_by: String,
     pub created_at: DateTime<Utc>,
 }
@@ -70,9 +66,7 @@ impl Intent {
             privacy: Privacy::OnDevicePreferred,
             energy: EnergyPreference::Unconstrained,
             region: RegionConstraint::Any,
-            duration: Duration::default(),
             verification: VerificationLevel::None,
-            tags: Vec::new(),
             created_by: created_by.to_string(),
             created_at: Utc::now(),
         }
@@ -340,6 +334,12 @@ impl EnergyPreference {
 }
 
 /// Region / regulatory constraint.
+///
+/// **ステータス**: `select_provider`/`check_feasibility` はまだこのフィールドを
+/// 読まない (プロバイダの地域メタデータが無いため配線不可)。
+/// `docs/RESEARCH_IMPROVEMENTS.md` #13 が `EnergyPreference` との統合を明示提案しており、
+/// `Intent.tags`/`Intent.duration` (v0.2.11 で削除、ロードマップ裏付けなし) とは異なり
+/// 削除対象ではない — 保持し、プロバイダ地域メタデータ基盤ができ次第配線する。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RegionConstraint {
@@ -356,22 +356,6 @@ pub enum RegionConstraint {
     Regime {
         regime: String,
     },
-}
-
-/// Temporal validity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Duration {
-    pub max_seconds: u32,
-    pub deadline: Option<DateTime<Utc>>,
-}
-
-impl Default for Duration {
-    fn default() -> Self {
-        Self {
-            max_seconds: 3600,
-            deadline: None,
-        }
-    }
 }
 
 /// Verification requirement for proof-of-execution.

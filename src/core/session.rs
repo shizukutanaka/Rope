@@ -72,19 +72,6 @@ impl Default for Limits {
     }
 }
 
-/// ジョブ仕様
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JobSpec {
-    /// Dockerイメージ
-    pub image: String,
-    /// 実行コマンド
-    pub command: String,
-    /// 入力ディレクトリ（オプション）
-    pub input_dir: Option<String>,
-    /// 出力ディレクトリ（オプション）
-    pub output_dir: Option<String>,
-}
-
 /// Capabilityトークン（権限制御）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Capability {
