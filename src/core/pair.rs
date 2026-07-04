@@ -1236,10 +1236,15 @@ pub fn format_pair(m: &PairManager) -> String {
         m.stats.currently_paired
     ));
     out.push_str(&format!(
-        "  累計発見: {} / 成功握手: {} / 失敗: {}\n",
+        "  累計発見: {} / 握手試行: {} / 成功: {} / 失敗: {}\n",
         m.stats.total_discovered,
+        m.stats.total_handshakes_attempted,
         m.stats.total_handshakes_succeeded,
         m.stats.total_handshakes_failed
+    ));
+    out.push_str(&format!(
+        "  累計ペア済ピア: {}\n",
+        m.stats.total_peers_ever_paired
     ));
     out.push_str(&format!(
         "  平均握手時間: {:.1} ms\n",
@@ -1935,6 +1940,40 @@ mod tests {
         assert!(out.contains("発見"), "発見数");
         assert!(out.contains("ペア"), "ペア数");
         assert!(out.contains("受付モード"), "受付モード");
+    }
+
+    /// total_handshakes_attempted / total_peers_ever_paired は書込みのみで
+    /// format_pair からは表示されていなかった (死蔵面監査で発見)。
+    /// 表示に配線したことを確認する。
+    #[test]
+    fn test_format_pair_shows_lifetime_counters() {
+        let mut m = PairManager::default();
+        let peer = m
+            .record_discovery(
+                "Alice's Mac",
+                "pk-a",
+                test_endpoint(9001),
+                DiscoveryMethod::Mdns,
+                test_caps(),
+            )
+            .unwrap();
+        let peer_id = peer.id.clone();
+        let session = m.begin_handshake(&peer_id).unwrap();
+        m.advance_handshake(&session.id).unwrap();
+        m.advance_handshake(&session.id).unwrap();
+        m.advance_handshake(&session.id).unwrap();
+        m.complete_handshake(&session.id, "pk-a", "key-hash")
+            .unwrap();
+
+        assert_eq!(m.stats.total_handshakes_attempted, 1);
+        assert_eq!(m.stats.total_peers_ever_paired, 1);
+
+        let out = format_pair(&m);
+        assert!(out.contains("握手試行"), "握手試行数が表示されるべき");
+        assert!(
+            out.contains("累計ペア済ピア"),
+            "累計ペア済ピア数が表示されるべき"
+        );
     }
 
     #[test]

@@ -367,7 +367,6 @@ pub struct EcashStats {
     pub total_mints_registered: u32,
     pub total_proofs_received_sats: u64,
     pub total_proofs_spent_sats: u64,
-    pub current_balance_sats: u64,
     pub total_escrows_opened: u64,
     pub total_escrows_released: u64,
     pub total_escrows_refunded: u64,
@@ -502,7 +501,6 @@ impl EcashManager {
         self.wallet.total_sats += amount_sats;
 
         self.stats.total_proofs_received_sats += amount_sats;
-        self.stats.current_balance_sats = self.wallet.total_sats;
         self.updated_at = Utc::now();
         Ok(proofs)
     }
@@ -546,7 +544,6 @@ impl EcashManager {
         }
 
         self.stats.total_proofs_spent_sats += spent_total;
-        self.stats.current_balance_sats = self.wallet.total_sats;
         let _ = before_len;
         self.updated_at = Utc::now();
         Ok(spent)
@@ -606,7 +603,6 @@ impl EcashManager {
         }
         self.wallet.total_sats += received;
         self.stats.total_proofs_received_sats += received;
-        self.stats.current_balance_sats = self.wallet.total_sats;
         self.updated_at = Utc::now();
         Ok(received)
     }
@@ -740,7 +736,6 @@ impl EcashManager {
 
         *bucket = kept;
         self.wallet.total_sats = self.wallet.total_sats.saturating_sub(amount_sats);
-        self.stats.current_balance_sats = self.wallet.total_sats;
         Ok(())
     }
 
@@ -826,7 +821,6 @@ impl EcashManager {
 
         // 返金額を wallet に戻す (簡略化)
         self.wallet.total_sats += e.amount_sats;
-        self.stats.current_balance_sats = self.wallet.total_sats;
 
         self.stats.total_escrows_refunded += 1;
         self.archive_escrow(escrow_id);
@@ -883,7 +877,6 @@ impl EcashManager {
                 self.stats.total_escrows_refunded += 1;
             }
         }
-        self.stats.current_balance_sats = self.wallet.total_sats;
         self.archive_escrow(escrow_id);
         self.updated_at = Utc::now();
         Ok(())
@@ -1021,7 +1014,6 @@ impl EcashManager {
 
         // 未使用分を wallet に返す
         self.wallet.total_sats += refund;
-        self.stats.current_balance_sats = self.wallet.total_sats;
 
         // 履歴へ移動
         if let Some(pos) = self.streams.iter().position(|s| s.id == stream_id) {
@@ -1103,8 +1095,9 @@ pub fn format_ecash(m: &EcashManager) -> String {
         m.stats.avg_escrow_sats, m.stats.deadman_auto_refunds
     ));
     out.push_str(&format!(
-        "\n🌊 ストリーム: active={} / 総流出: {} sats\n",
+        "\n🌊 ストリーム: active={} / 累計開設: {} / 総流出: {} sats\n",
         m.streams.len(),
+        m.stats.total_streams_opened,
         m.stats.total_stream_sats_drained
     ));
     out.push_str(&format!(
@@ -1836,6 +1829,22 @@ mod tests {
         assert!(out.contains("mint"), "mint 情報");
         assert!(out.contains("エスクロー"), "escrow セクション");
         assert!(out.contains("ストリーム"), "stream セクション");
+    }
+
+    /// total_streams_opened は書込みのみで format_ecash からは表示されていなかった
+    /// (死蔵面監査で発見)。表示に配線したことを確認する。
+    #[test]
+    fn test_format_ecash_shows_total_streams_opened() {
+        let mut m = EcashManager::default();
+        m.add_mint(test_mint("mint1")).unwrap();
+        m.trust_mint("mint1", MintTrust::Trusted).unwrap();
+        m.mint_tokens("mint1", 500).unwrap();
+        m.open_stream("job1", "alice", "bob", "mint1", 100, 1)
+            .unwrap();
+
+        assert_eq!(m.stats.total_streams_opened, 1);
+        let out = format_ecash(&m);
+        assert!(out.contains("累計開設"), "累計開設数が表示されるべき");
     }
 
     /// save → load roundtrip: 永続化が壊れてないことの保証
