@@ -48,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`test_load_or_recover_corrupt_backs_up_and_defaults` でテスト済み)。
   修正不要と判断
 
+### Added
+- **`SECURITY.md`** — 従来存在しなかったセキュリティポリシー文書を新設。
+  「本物として機能している暗号 (QR HMAC・Capability 署名・nullifier 検出・
+  永続化の破損検出)」と「まだプレースホルダの暗号 (BDHKE・TEE attestation 署名・
+  Noise 握手・P2P 通信そのもの)」を明確に分離して一覧化し、TOFU 信頼モデルの
+  限界、脆弱性報告の窓口を記載。純粋なドキュメント追加でありコンパイル不要 —
+  今回の環境制約下でも安全に実施可能だった項目
+
 ## [0.2.13] - 2026-07-01
 
 v0.2.11/v0.2.12 で記録した Tier 3 (未構築 enum variant) の判断を実施。
