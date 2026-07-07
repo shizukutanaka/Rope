@@ -1070,11 +1070,6 @@ impl IntentManager {
         (true, None)
     }
 
-    /// Retrieve a plan by its ID.
-    pub fn get_plan(&self, plan_id: &str) -> Option<&ExecutionPlan> {
-        self.plans.iter().find(|p| p.id == plan_id)
-    }
-
     /// Archive an intent to history.
     pub fn complete(&mut self, intent_id: &str) -> Result<()> {
         let idx = self

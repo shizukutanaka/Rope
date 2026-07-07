@@ -542,7 +542,12 @@ impl ConfidentialManager {
         if success {
             self.stats.successful_attestations += 1;
         }
-        self.updated_at = Utc::now();
+        // active_tee_instances は tee_instances の実際の status から都度再計算する
+        // 必要がある (単純な +=/-= では Running↔Error の往復を正しく追えない)。
+        // update_stats() 自体は元々どこからも呼ばれておらず、format_confidential が
+        // 表示する active_tee_instances が常に 0 のまま固定されていた
+        // (死蔵面監査で発見、TeeStatus::Running 未代入バグ (v0.2.11) と同根)。
+        self.update_stats();
 
         Ok(report)
     }
@@ -1110,6 +1115,26 @@ mod tests {
             m.active_tee_count(),
             1,
             "active_tee_count は実際に稼働中のインスタンスを反映すべき"
+        );
+    }
+
+    /// update_stats() は元々どこからも呼ばれておらず、format_confidential が表示する
+    /// stats.active_tee_instances は常に 0 のまま固定されていた (active_tee_count() とは
+    /// 別の、format_confidential 用のキャッシュフィールド)。perform_attestation から
+    /// 呼ばれるようになったことを確認する。
+    #[test]
+    fn test_perform_attestation_updates_cached_stats() {
+        let mut m = ConfidentialManager::default();
+        let inst =
+            m.create_tee_instance("gpu-1", "H100", TeeType::NvidiaGpuTee, SecurityLevel::High);
+        assert_eq!(m.stats.active_tee_instances, 0);
+
+        m.perform_attestation(&inst.id).unwrap();
+
+        assert_eq!(
+            m.stats.active_tee_instances, 1,
+            "stats.active_tee_instances (format_confidential が表示するキャッシュ値) は\
+             perform_attestation 後に更新されるべき"
         );
     }
 

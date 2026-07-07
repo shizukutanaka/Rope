@@ -375,16 +375,6 @@ fn generate_keypair() -> Result<()> {
     Ok(())
 }
 
-/// 秘密鍵をロード
-pub fn load_private_key() -> Result<SigningKey> {
-    let b64 = fs::read_to_string(private_key_path()).context("秘密鍵読込失敗")?;
-    let bytes = BASE64.decode(b64.trim()).context("秘密鍵デコード失敗")?;
-    let key_bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("秘密鍵長不正"))?;
-    Ok(SigningKey::from_bytes(&key_bytes))
-}
-
 /// 公開鍵をロード
 pub fn load_public_key() -> Result<VerifyingKey> {
     let b64 = fs::read_to_string(public_key_path()).context("公開鍵読込失敗")?;
@@ -406,13 +396,6 @@ pub fn compute_fingerprint(pubkey: &VerifyingKey) -> String {
     )
 }
 
-/// 設定をロード
-pub fn load_config() -> Result<Config> {
-    let content = fs::read_to_string(config_path()).context("設定ファイル読込失敗")?;
-    let config: Config = serde_json::from_str(&content).context("設定ファイルパース失敗")?;
-    Ok(config)
-}
-
 /// 設定を保存
 pub fn save_config(config: &Config) -> Result<()> {
     let content = serde_json::to_string_pretty(config).context("設定シリアライズ失敗")?;
@@ -422,14 +405,6 @@ pub fn save_config(config: &Config) -> Result<()> {
 /// 初期化済みかチェック
 pub fn is_initialized() -> bool {
     config_path().exists() && private_key_path().exists()
-}
-
-/// 初期化チェック（未初期化ならエラー）
-pub fn ensure_initialized() -> Result<()> {
-    if !is_initialized() {
-        anyhow::bail!("未初期化 — 先に rope を一度実行してください");
-    }
-    Ok(())
 }
 
 /// 設定状態を 1 画面フォーマット

@@ -68,6 +68,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   行うブラスト半径は、単発の1行修正とは比較にならない。次回ビルド可能な
   環境での実施手順をドキュメント内に明記
 
+### Removed / Changed (同日フォローアップ — category (c) 15件を個別再検証)
+
+- `config::load_private_key`/`load_config`/`ensure_initialized` を削除。
+  いずれも汎用 `load_or_recover<T>` に置き換わって取り残された旧ユーティリティ
+  (呼び出し元ゼロを再確認、依存インポートは他所で使用中のため孤立せず)
+- `intent::IntentManager::get_plan` を削除。自明な1行アクセサでロードマップ
+  記載も無し
+- `confidential::ConfidentialManager::update_stats` は削除せず
+  `perform_attestation` から呼ぶよう配線。`format_confidential` が表示する
+  `stats.active_tee_instances` を再計算する唯一の関数だったが誰も呼んでおらず
+  常に0固定だった (`TeeStatus::Running` 未代入バグ (v0.2.11) と同根)。
+  回帰テスト追加
+- `intent::Intent::with_region`・`confidential::TeeType::is_cpu_tee` は
+  呼出ゼロだが削除せず保持: 前者は `RegionConstraint` の唯一のセッターで
+  削除するとv0.3で再度必要になる、後者は composite attestation 設計を
+  明示的に説明するコメント付きで設計意図が明確
+- `session.rs` の10件クラスターは意図的に見送り。個別に読んだ結果
+  `panic_stop`(緊急停止, 過去のバグ修正履歴あり)・`SessionManager`
+  (v0.3 async化を想定した設計コメントあり) は安全性/設計上の理由がある
+  未結線コードであり、「呼出ゼロ」だけを根拠に削除すべきではないと判断。
+  製品判断が必要なため次回に持ち越し
+- テスト計 239 (default) / 245 (`--features http`) 相当 (regression test 1件追加、
+  引き続き**未検証** — 上記ビルド不能の制約は継続中)
+
 ## [0.2.13] - 2026-07-01
 
 v0.2.11/v0.2.12 で記録した Tier 3 (未構築 enum variant) の判断を実施。
