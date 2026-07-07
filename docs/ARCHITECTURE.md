@@ -54,27 +54,27 @@
 | モジュール | 行数 | テスト | 責務 |
 |-----------|-----:|------:|------|
 | **config** | 715 | 15 | 鍵生成 (Ed25519), 設定, ディレクトリ管理, プロセス間ロック |
-| **pair** | 2,480 | 47 | ピア発見 (mDNS/BT/QR/DHT), Noise XX/IK 握手, 信頼ストア, QR nonce リプレイ防止 |
-| **session** | 868 | 22 | セッション状態機械, verify code, panic stop, capability token |
-| **confidential** | 1,477 | 28 | TEE attestation (H100/H200/Blackwell), 暗号セッション, ポリシー鮮度検証 |
-| **intent** | 1,613 | 33 | Intent → ExecutionPlan 解決, 予算/遅延/プライバシー制約 |
-| **ecash** | 1,873 | 38 | Cashu NUT-00 proof, escrow (6状態), streaming (1秒単位) |
-| **first_run** | 1,114 | 19 | 60秒 wow moment (9 stage state machine) |
+| **pair** | 2,540 | 50 | ピア発見 (mDNS/BT/QR/DHT), Noise XX/IK 握手 (状態機械のみ、実鍵交換は v0.3), 信頼ストア, QR nonce リプレイ防止 |
+| **session** | 855 | 22 | セッション状態機械, verify code, panic stop, capability token |
+| **confidential** | 1,403 | 28 | TEE attestation (H100/H200/Blackwell), 暗号セッション, ポリシー鮮度検証 |
+| **intent** | 1,842 | 37 | Intent → ExecutionPlan 解決, 予算/遅延/プライバシー制約 |
+| **ecash** | 1,865 | 40 | Cashu NUT-00 proof, escrow (6状態), streaming (1秒単位) |
+| **first_run** | 1,108 | 19 | 60秒 wow moment (9 stage state machine) |
 
 ### net/ — I/O 層
 
 | モジュール | 行数 | テスト | 責務 |
 |-----------|-----:|------:|------|
-| **cashu_mint** | 907 | 17 (http feature 有効時 23) | Cashu HTTP client (NUT-01/04/05/06/07), 翻訳層 (**未結線**: 呼び出し元ゼロ) |
+| **cashu_mint** | 911 | 17 (http feature 有効時 23) | Cashu HTTP client (NUT-01/04/05/06/07), 翻訳層 (**未結線**: 呼び出し元ゼロ) |
 
 ### 統合層
 
 | ファイル | 行数 | テスト | 責務 |
 |---------|-----:|------:|------|
 | **lib.rs** | 15 | — | `core`/`net` を再エクスポートするライブラリクレート境界。examples/ 及び外部から `use rope::core::...` で利用可能 |
-| **main.rs** | 607 | 13 | CLI 引数解析, 4 動詞ルーティング, 統合テスト。`lib.rs` を経由して core/net を利用 |
+| **main.rs** | 643 | 13 | CLI 引数解析, 4 動詞ルーティング, 統合テスト。`lib.rs` を経由して core/net を利用 |
 
-合計: 11,730 行, 232 テスト (default) / 238 テスト (`--features http`) (2026-07-01 時点、v0.2.5)
+合計: 11,948 行, 238 テスト (default) / 244 テスト (`--features http`) (2026-07-06 時点、v0.2.13)
 
 ---
 

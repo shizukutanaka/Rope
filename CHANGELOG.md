@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+**⚠️ この節の変更はコンパイラ未検証。** 今回のセッションのコンテナはネットワーク
+ポリシーにより `static.crates.io`/`crates.io` への接続が 403 (policy denial) で
+拒否され、かつ新規作成コンテナのため依存クレートキャッシュもゼロ — 既存の
+依存関係すら再取得できず `cargo build` 自体が失敗する状態だった (`cargo build
+--offline` は `anstream` 取得失敗で即エラー、`$HTTPS_PROXY/__agentproxy/status`
+で `connect_rejected`/`policy denial` を確認)。従って以下は入念な手動レビューのみで
+`cargo build`/`test`/`clippy`/`fmt` による検証を経ていない。ビルド可能な環境での
+再検証が必須。
+
+「市販レベルの品質」を目指す監査の一環として、新規依存を要さず・低リスクな
+改善から着手した (詳細な現状評価は `docs/ASSESSMENT.md` 参照)。
+
+### Changed
+- `pair::PairManager::accept_pairing_token` — 外部/未信頼入力 (QR コード文字列) が
+  起点となる経路上にあった `.expect("record_discovery が追加したピアが見つからない")`
+  を `.context(...)?` に変更。`record_discovery` の実装が将来変わっても panic せず
+  `Err` を返すようになる (現状は両者とも同じ理由で失敗しないため機能的な差は無い、
+  防御的ハードニング)
+- `docs/ARCHITECTURE.md` のモジュール別行数/テスト数テーブルが v0.2.5 時点のまま
+  古かった (11,730行/232テスト) のを、v0.2.13 時点の実測値
+  (11,948行/238テスト・244テスト`--features http`) に同期
+- `README.md` の「60秒デモ」直後に、これが実 P2P/実推論ではなく
+  `sample_haiku_response()` による固定応答のシミュレーションであることを明示する
+  注記を追加。`docs/ASSESSMENT.md` には既に記載があったが、README のみを読む
+  読者には伝わっていなかった
+
+### Deferred — 明示的なユーザー確認が必要、または再検証可能な環境が必要
+- **CI 有効化** (`.github/ci.yml.disabled` → `.github/workflows/ci.yml`):
+  auto mode の許可分類器が「secrets アクセスを伴う自動パイプラインの起動に
+  ユーザーの明示的同意が無い」として正しくブロックした。`.disabled` ファイル自体は
+  改善済み (トリガーを `main` 限定から全ブランチ push/PR に拡張、`--features http`
+  のテスト/clippy ジョブを追加) — 移動のみユーザー確認待ち
+- **`#![allow(dead_code)]` の棚卸し** (`src/lib.rs`/`src/main.rs`):
+  コンパイラのフィードバック無しに dead_code 判定を行うのは高リスクと判断し、
+  今回は着手を見送り。ビルド可能な環境での次回実施を推奨
+- `load_confidential()`/`load_pair()` の「破損 vs 未設定」区別: 調査の結果、
+  既存の `config::load_or_recover` が既に両者を区別し、破損時は `eprintln!` で
+  警告しファイルをバックアップした上で初期状態に倒す実装済みの挙動だった
+  (`test_load_or_recover_corrupt_backs_up_and_defaults` でテスト済み)。
+  修正不要と判断
+
 ## [0.2.13] - 2026-07-01
 
 v0.2.11/v0.2.12 で記録した Tier 3 (未構築 enum variant) の判断を実施。

@@ -80,16 +80,22 @@
 | **`RegionConstraint` の doc comment 明記 (ロードマップ裏付けあり、保持)** | ✅ 改良済 | `281ee2e` |
 | **`EcashStats.current_balance_sats` 冗長ミラー削除** | ✅ 改良済 | `f025b3c` |
 | **write-only lifetime カウンタ3件を表示配線 (delete-or-wire の wire 判定例)** | ✅ 改良済 | `f025b3c` |
-| **`StreamState::Opening/Paused/Closing` 削除 (構築経路ゼロ)** | ✅ 改良済 | (this) |
-| **`DiscoveryMethod::Contact` 削除 (構築経路ゼロ)** | ✅ 改良済 | (this) |
-| **`TrustLevel::OwnDevice` の doc comment 明記 (未結線の判定分岐、保持)** | ✅ 改良済 | (this) |
-| **`SessionStatus` の doc comment 明記 (v0.3 実TEEセッション待ち、保持)** | ✅ 改良済 | (this) |
+| **`StreamState::Opening/Paused/Closing` 削除 (構築経路ゼロ)** | ✅ 改良済 | `9ebcf65` |
+| **`DiscoveryMethod::Contact` 削除 (構築経路ゼロ)** | ✅ 改良済 | `9ebcf65` |
+| **`TrustLevel::OwnDevice` の doc comment 明記 (未結線の判定分岐、保持)** | ✅ 改良済 | `9ebcf65` |
+| **`SessionStatus` の doc comment 明記 (v0.3 実TEEセッション待ち、保持)** | ✅ 改良済 | `9ebcf65` |
+| **QR 入力経路 (`accept_pairing_token`) の `.expect()` を `.context(...)?` に強化** | ⚠️ 改良済・**未検証** (下記参照) | (this) |
+| **`ARCHITECTURE.md` 統計テーブルの同期 (v0.2.5→v0.2.13 時点値)** | ✅ 改良済 | (this) |
+| **README「60秒デモ」がシミュレーションである旨の明示** | ✅ 改良済 | (this) |
+| **`load_confidential/load_pair` の破損vs未設定区別を調査** | ✅ 判定済 (既に `load_or_recover` が対応済、修正不要) | (this) |
 | NAT 越え (libp2p DCUtR) / Noise 実結線 | ⏳ 大・新規依存要 (この環境では crates.io 制約で実施不能と判明) | — |
 | 検証本体 (VeriLLM 風 再実行 / TOPLOC LSH) | ⏳ 大 (実推論エンジン自体が未実装) | — |
 | BDHKE 実装 (secp256k1、現状は unblinding プレースホルダ) | ⏳ 大・新規依存要 (この環境では crates.io 制約で実施不能と判明) | — |
 | 永続化の WAL 化 (現状は動詞末尾のチェックポイントのみ) | ⏳ 中 | — |
-| CI 有効化 (`.github/workflows/` への移動) | ⏳ 要ユーザー判断 (secrets アクセス) | — |
+| **CI 有効化** (`.github/workflows/` への移動) | ⏳ 要ユーザー判断 (secrets アクセス) — auto mode 許可分類器が明示同意無しとしてブロック。`.disabled` 内容は改善済み (全ブランチ trigger 化 + http feature ジョブ追加) | — |
 | pair.rs QR/TOFU 系統計7件の表示配線 (診断情報過多の懸念、見送り) | ⏳ 次回判断 | — |
+| **`#![allow(dead_code)]` (`lib.rs`/`main.rs`) の棚卸し** | ⏳ 次回判断 — コンパイラ検証無しでは高リスクと判断し見送り | — |
+| **⚠️ 環境の重大な制約発見**: このセッションのコンテナは新規作成で依存クレートキャッシュが空、かつネットワークポリシーが `static.crates.io`/`crates.io` を 403 でブロック — `cargo build` が既存依存関係すら取得できず失敗する状態を確認 (`$HTTPS_PROXY/__agentproxy/status` で `policy denial` 確認)。上記「未検証」の変更はこの制約下で手動レビューのみ実施。ビルド可能な環境での再検証が必須。ユーザーが環境作成時のネットワークポリシーを見直せば解消できる可能性が高い | 🔴 要対応 | — |
 
 ### ソクラテス式問答 Round 5 — ecash.rs の 3 欠陥
 

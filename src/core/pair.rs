@@ -741,12 +741,14 @@ impl PairManager {
             .clone();
 
         self.stats.qr_tokens_consumed += 1;
-        // record_discovery で追加済のピアを再取得 (借用衝突回避)
-        Ok(self
-            .discovered
+        // record_discovery で追加済のピアを再取得 (借用衝突回避)。
+        // record_discovery は成功時必ず対応ピアを挿入/更新するため通常は必ず見つかるが、
+        // QR という外部/未信頼入力が起点の経路なので expect ではなく Result で
+        // 素直にエラーを返す (record_discovery の実装が将来変わっても panic しない)
+        self.discovered
             .iter()
             .find(|p| p.id == peer_id)
-            .expect("record_discovery が追加したピアが見つからない"))
+            .context("record_discovery が追加したピアが見つからない")
     }
 
     /// 発見されたピアとの握手を開始

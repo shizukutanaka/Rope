@@ -1,7 +1,8 @@
 # Rope CI — Apple 的品質ゲート
 #
-# 全 PR + main push で実行。
-# 4 ジョブ全 PASS が merge 条件。
+# 全 push + 全 PR で実行 (現状 main ブランチが存在しないため push は
+# ブランチ名を限定せず all-branches とする — main 作成後もこのままで動く)。
+# 5 ジョブ全 PASS が merge 条件。
 #
 # Apple の Xcode Cloud / TestFlight 相当:
 # 「コードがきれい」と「コードが動く」は別の品質。両方必要。
@@ -10,9 +11,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
-    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -35,6 +34,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.75.0
       - run: cargo test --all-targets
 
+  test-http:
+    name: cargo test (--features http)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.75.0
+      - run: cargo test --all-targets --features http
+
   clippy:
     name: clippy
     runs-on: ubuntu-latest
@@ -44,6 +51,7 @@ jobs:
         with:
           components: clippy
       - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --features http -- -D warnings
 
   fmt:
     name: rustfmt
@@ -58,7 +66,7 @@ jobs:
   # Apple 的出荷判定: 全ジョブ green なら merge 可
   gate:
     name: quality gate
-    needs: [check, test, clippy, fmt]
+    needs: [check, test, test-http, clippy, fmt]
     runs-on: ubuntu-latest
     steps:
       - run: echo "✅ All quality gates passed"
