@@ -55,6 +55,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Noise 握手・P2P 通信そのもの)」を明確に分離して一覧化し、TOFU 信頼モデルの
   限界、脆弱性報告の窓口を記載。純粋なドキュメント追加でありコンパイル不要 —
   今回の環境制約下でも安全に実施可能だった項目
+- **`docs/REACHABILITY_AUDIT.md`** — `#![allow(dead_code)]` (`lib.rs`/`main.rs`) 配下
+  161 個の pub fn を、4動詞のハンドラからの実呼び出しチェーンで
+  reachable(68)/test-only(64)/呼出ゼロ(15)/連鎖デッド(14) に分類。
+  「予約 v0.3 API」という既存の正当化コメントは方向性としては正しいが粗すぎ、
+  テストの裏付けすら無い 29 関数 (呼出ゼロ15 + 連鎖デッド14) が混在していたと
+  判明。特に `session.rs` が外れ値 (25関数中10件): `SessionManager::end`,
+  `panic_stop`, `is_stop_requested`, `get_status`, `cleanup`,
+  `list_sessions`, `format_session_list`, `Session::load`/`delete`,
+  `reset_stop_flag` は現行4動詞設計以前の残骸である可能性が高い。
+  **今回は削除しない** — コンパイラ検証不能な環境で29関数にまたがる削除を
+  行うブラスト半径は、単発の1行修正とは比較にならない。次回ビルド可能な
+  環境での実施手順をドキュメント内に明記
 
 ## [0.2.13] - 2026-07-01
 

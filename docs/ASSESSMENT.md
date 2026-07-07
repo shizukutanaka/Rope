@@ -94,7 +94,7 @@
 | 永続化の WAL 化 (現状は動詞末尾のチェックポイントのみ) | ⏳ 中 | — |
 | **CI 有効化** (`.github/workflows/` への移動) | ⏳ 要ユーザー判断 (secrets アクセス) — auto mode 許可分類器が明示同意無しとしてブロック。`.disabled` 内容は改善済み (全ブランチ trigger 化 + http feature ジョブ追加) | — |
 | pair.rs QR/TOFU 系統計7件の表示配線 (診断情報過多の懸念、見送り) | ⏳ 次回判断 | — |
-| **`#![allow(dead_code)]` (`lib.rs`/`main.rs`) の棚卸し** | ⏳ 次回判断 — コンパイラ検証無しでは高リスクと判断し見送り | — |
+| **`#![allow(dead_code)]` (`lib.rs`/`main.rs`) の到達可能性監査**: 161 pub fn を4動詞からの呼び出しチェーンで分類 (到達68・test-only 64・呼出ゼロ15・連鎖デッド14)。詳細: [`docs/REACHABILITY_AUDIT.md`](REACHABILITY_AUDIT.md)。特に `session.rs` が外れ値 (25関数中10件が呼出ゼロ/連鎖デッド — `SessionManager`/panic・cleanup系配線が v0.3 予約 API ではなく現行設計以前の残骸である可能性) | ✅ 監査完了・削除は次回 | — |
 | **⚠️ 環境の重大な制約発見**: このセッションのコンテナは新規作成で依存クレートキャッシュが空、かつネットワークポリシーが `static.crates.io`/`crates.io` を 403 でブロック — `cargo build` が既存依存関係すら取得できず失敗する状態を確認 (`$HTTPS_PROXY/__agentproxy/status` で `policy denial` 確認)。上記「未検証」の変更はこの制約下で手動レビューのみ実施。ビルド可能な環境での再検証が必須。ユーザーが環境作成時のネットワークポリシーを見直せば解消できる可能性が高い | 🔴 要対応 | — |
 
 ### ソクラテス式問答 Round 5 — ecash.rs の 3 欠陥
