@@ -275,7 +275,10 @@
 
 ## 10. 省エネ・カーボン・エッジ スケジューリング
 
-**スコープ**: `intent` の `EnergyPreference`/`RegionConstraint`（現状 dead field）を実機能に。
+**スコープ**: `intent` の `EnergyPreference`/`RegionConstraint` を実機能に。
+(2026-07-06 更新: `EnergyPreference` は既に resolver に配線済み。以下は
+2026-06-05 時点の記述のまま — `RegionConstraint` のみ依然 dead field。
+詳細: [`RESEARCH_IMPROVEMENTS.md`](RESEARCH_IMPROVEMENTS.md) #13)
 
 ### 関連10件
 1. **FREESH** — [arXiv:2511.00807](https://arxiv.org/pdf/2511.00807)（**異種GPU**のエネルギー特性×地域カーボンの時空間協調）
@@ -290,8 +293,10 @@
 10. **WISP（エッジ SLO バッチ）** — [arXiv:2601.11652](https://arxiv.org/pdf/2601.11652)
 
 ### Rope への改善点
-- **J1. dead field の配線 or 削除（既出 #13）**: `EnergyPreference`/`RegionConstraint` を resolver の
-  実入力にし低カーボン/再エネピアを選好（FREESH/SLIT）。やらないなら削除（API 誇大表示の是正）。
+- **J1. dead field の配線 or 削除（既出 #13）**: ✅ `EnergyPreference` は配線済み
+  (`MinimizeWatts`/`RenewableOnly`/`PreferRenewable` が resolver の実入力)。
+  残る `RegionConstraint` は低カーボン地域ピア選好 (FREESH/SLIT) に使えるが、
+  プロバイダ側の地域メタデータが無いため配線不可。
 - **J2. 異種エネルギー効率**: ピア発見時に消費電力/効率メタを取得し、`EnergyPreference` 指定時に反映。
 - **J3. 過度な約束を避ける**: arXiv:2306.06502 は carbon-aware shifting の効果限界を指摘。控えめに。
 - **J4. embodied carbon の positioning**: 「他人の**アイドル**GPU 再利用」は新規製造を伴わず
