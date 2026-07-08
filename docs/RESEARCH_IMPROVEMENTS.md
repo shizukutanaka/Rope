@@ -351,9 +351,18 @@ liveness のみ必要なら difficulty=0 の `issue_capability_challenge()` を�
 
 ## 13. エネルギー / カーボン対応（中〜低・既存フィールドの実装） — 第2巡
 
-### 現状
-`intent.rs` に `EnergyPreference`（既定: unconstrained）と `RegionConstraint` が **存在するが
-未使用の dead field**。宣言だけで resolver が利用していない。
+### 現状 (2026-07-06 更新: 本節は 2026-06-05 時点の記述で古くなっていた)
+`EnergyPreference` は **既に resolver (`select_provider`) に配線済み**:
+`minimizes_watts()` は `Privacy::FederatedOnly` でない Small ワークロードを
+`LocalDevice` へ、それ以外を低エネルギー係数の `FederatedPeer` へ誘導し、
+`RenewableOnly`/`PreferRenewable` は `SpotMarket`/`Hyperscaler` より
+`FederatedPeer` を優先する。dead field ではなく本改善案の (1) は完了済み。
+
+一方 `RegionConstraint` は依然未配線 (`intent.rs::RegionConstraint` の doc comment
+に記載の通り、プロバイダ側の地域メタデータが無いため配線不可)。
+`docs/RESEARCH_IMPROVEMENTS.md` 本節が提案する「`RegionConstraint` と統合」は
+`EnergyPreference` 側が先に単独で配線されたことで、当初の想定と順序が変わった —
+残作業は `RegionConstraint` 単体の配線 (プロバイダ地域メタデータ基盤が前提)。
 
 ### 同種ソフト / arXiv
 - **FREESH** ([arXiv:2511.00807](https://arxiv.org/pdf/2511.00807)) — 地域別カーボン排出率
@@ -387,7 +396,7 @@ liveness のみ必要なら difficulty=0 の `issue_capability_challenge()` を�
 | 中 | #6 異種性スケジューリング | 複数ピア pipeline（Parallax 2段） |
 | 中 | #7 永続化 | ecash 状態の WAL/crash recovery |
 | 中 | #12 プロバイダ側推論効率 | 連続バッチ+prefix KV+投機デコード（earn 採算） |
-| 中低 | #13 エネルギー/カーボン | EnergyPreference を配線 or 削除（dead field 整理） |
+| 中低 | #13 エネルギー/カーボン | ✅ `EnergyPreference` 配線済。残るは `RegionConstraint` 統合 (プロバイダ地域メタデータ待ち) |
 | 低 | #8 経済設計 | 現状固定価格を支持 |
 
 ### すぐ着手できる小改善（low-hanging fruit）
