@@ -45,6 +45,27 @@ trait 実装や設計意図の有無を確認)、リスクが低いと判断で�
   レイヤーを v0.3 でどう使うか) が必要であり、コード監査だけで決めるべきでは
   ない
 
+## 第2回フォローアップ — category (b) の「呼ぶべきだが呼ばれていない」パターン捜索
+
+`update_stats` の修正パターン (doc comment は「定期的に呼ぶ」ことを前提として
+いるが実際の呼び出し元が無い) が他にも無いか、category (b) の中から
+prune/cleanup/refresh 系の関数を洗い出して個別に判断した:
+
+- **配線した**: `pair::prune_stale_discoveries`/`prune_completed_challenges`
+  (`run_pair`/`run_earn` の両方に追加。詳細は CHANGELOG 参照)
+- **配線を見送った**: `confidential::refresh_expired_attestations` —
+  一見 `run_inference` の TEE ルーティング判断前に呼ぶべきに見えたが、実際の
+  ルーティング関数 `freshest_verified_instance()` は `attestation_status`
+  フィールドに頼らず `attestation_is_fresh()` で独自に鮮度を都度チェックして
+  おり、安全性はこの関数の有無に依存しない。配線するには `run_inference` に
+  新規の `save_confidential()` 呼び出しを追加する必要があり (現状は読込のみ)、
+  リスクの割に得られる価値が表示上の鮮度反映のみと低いため見送り
+- **配線を見送った**: `ecash::process_deadman`/`check_idle_streams` —
+  escrow/stream 自体がどの CLI 動詞からも作成されない (ecash の CLI 結線が
+  丸ごと存在しない) ため、呼び出しを追加しても操作対象データが常に空。
+  `pair.rs` の prune 関数とは異なり、対応する「アクティブに状態を作る」動詞が
+  無いため自然な呼び出し箇所が無い
+
 **結論**: category (c)/(d) というグレップベースの分類は出発点として有用だが、
 機械的に全削除すべきではない。今回のように、各関数を個別に読み、
 「単純に陳腐化した重複」か「設計意図のある未結線コード」かを人間の判断で
