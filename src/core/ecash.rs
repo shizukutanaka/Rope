@@ -87,6 +87,18 @@ impl SpentNullifiers {
 }
 
 /// ecash マネージャ (ウォレット + escrow + streaming の複合)
+///
+/// **ステータス**: `add_mint`/`trust_mint`/`mint_tokens`/`spend_proofs`/
+/// `receive_proofs`/`open_escrow`/`mark_escrow_in_progress`/`release_escrow`/
+/// `refund_escrow`/`dispute_escrow`/`resolve_dispute`/`open_stream`/
+/// `tick_stream`/`close_stream` (計 14 の状態変更メソッド) は全て実装・単体テスト
+/// 済みだが、現行 4 動詞のどこからも呼ばれていない。`first_run::
+/// FirstRunOrchestrator` は `&mut EcashManager` を保持するが `step_*` のどれも
+/// `self.ecash` に触れない。`main.rs` の他3動詞も同様に `load_ecash`
+/// (残高表示の読取専用) 以外でこの構造体を変更しない。BDHKE 署名がまだ
+/// プレースホルダである点 (`SECURITY.md`) と合わせ、v0.3 で実 ecash が
+/// 結線されるまではこの API 全体が「テスト済みの仕様書」以上の意味を持たない。
+/// 詳細: `docs/SURPLUS_AND_GAPS.md` §2.3。
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EcashManager {
     /// 自分の ecash 残高 (未使用トークン)
