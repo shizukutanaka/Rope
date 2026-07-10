@@ -18,6 +18,21 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 
 /// ピアリング状態マネージャ
+///
+/// **ステータス**: `load_pair`/`save_pair`/`format_pair`/`prune_stale_discoveries`/
+/// `prune_completed_challenges` は `main.rs` から呼ばれるが、発見・握手・
+/// proof-of-capability チャレンジ・信頼スコアの実ロジック本体
+/// (`record_discovery`/`begin_handshake`/`advance_handshake`/
+/// `complete_handshake`/`accept_pairing_token`/`issue_capability_challenge`/
+/// `issue_pow_challenge`/`verify_capability_proof`/`reputation_score` 等、
+/// 33 pub fn 中 27 — `docs/REACHABILITY_AUDIT.md` 集計後に `prune_stale_discoveries`/
+/// `prune_completed_challenges` の2件を本セッションで配線したため、
+/// 到達可能数は同ドキュメント記載の4件から6件に増えている)
+/// はテストからのみ呼ばれ、実際の CLI 動詞からは到達しない。
+/// `rope pair` はセッション状態機械 + verify code 生成までで止まる
+/// (`capability_boundary!` マクロが正直に開示)。実 mDNS/Bluetooth/QR 発見は
+/// v0.3 で結線予定。詳細: `docs/SURPLUS_AND_GAPS.md` §3、
+/// `docs/REACHABILITY_AUDIT.md`。
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PairManager {
     /// 発見済みピア (LAN + DHT)
