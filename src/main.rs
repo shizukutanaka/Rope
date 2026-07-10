@@ -275,6 +275,12 @@ fn run_pair(accept_mode: &str) -> Result<()> {
     if let Err(e) = core::session::prune_stale() {
         eprintln!("⚠️  孤児セッション掃除スキップ ({})", e);
     }
+    // 古い discovery エントリ・完了済チャレンジも同様に掃除 (v0.3 で record_discovery/
+    // issue_capability_challenge が実結線されて discovered/pending_challenges が
+    // 実際に増え始めたときの無限増長を防ぐ。両関数とも doc comment で「定期的に
+    // 呼び出すこと」を前提としていたが、これまでどこからも呼ばれていなかった)。
+    mgr.prune_stale_discoveries(60);
+    mgr.prune_completed_challenges();
 
     // セッション開始: Idle → Waiting + 6桁 verify code
     // Apple 流 AirDrop UX: 同じ番号が両側に出れば本物
@@ -419,6 +425,9 @@ fn run_earn(rate_sats_per_sec: u64, max_minutes: u32) -> Result<()> {
     if mgr.config.accept_mode == AcceptMode::Off {
         mgr.config.accept_mode = AcceptMode::LanOnly;
     }
+    // 古い discovery エントリ・完了済チャレンジを掃除 (run_pair と同じ理由 — 詳細はそちら参照)。
+    mgr.prune_stale_discoveries(60);
+    mgr.prune_completed_challenges();
     save_pair(&mgr)?;
 
     // 孤児セッション掃除 (前回の waiting が溜まらないように)。

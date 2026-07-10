@@ -97,6 +97,7 @@
 | **`#![allow(dead_code)]` (`lib.rs`/`main.rs`) の到達可能性監査**: 161 pub fn を4動詞からの呼び出しチェーンで分類 (到達68・test-only 64・呼出ゼロ15・連鎖デッド14)。詳細: [`docs/REACHABILITY_AUDIT.md`](REACHABILITY_AUDIT.md) | ✅ 監査完了 | — |
 | **呼出ゼロ15件の個別再検証・実施**: 単純に陳腐化した4件を削除 (`load_private_key`/`load_config`/`ensure_initialized`/`get_plan`)、1件は削除ではなく配線 (`confidential::update_stats` — `format_confidential` 表示用キャッシュが常に0固定だった)、2件は設計意図ありと判断し保持 (`with_region`/`is_cpu_tee`) | ✅ 改良済 | (this) |
 | **`session.rs` の10件クラスター (`SessionManager`/`panic_stop` 系)**: 個別に読んだ結果、安全性クリティカル (緊急停止) / 設計意図明記 (v0.3 async化コメント) のコードと判明。「呼出ゼロ」のみを根拠に削除すべきでないと判断し、製品判断が必要なため保持 | ⏳ 次回、製品判断が必要 | — |
+| **`pair::prune_stale_discoveries`/`prune_completed_challenges` の配線**: doc comment が「定期的に呼び出すこと」を前提としていたが呼び出し元ゼロだった (`update_stats` と同型)。`run_pair`/`run_earn` から呼ぶよう配線 | ✅ 改良済 | (this) |
 | **⚠️ 環境の重大な制約発見**: このセッションのコンテナは新規作成で依存クレートキャッシュが空、かつネットワークポリシーが `static.crates.io`/`crates.io` を 403 でブロック — `cargo build` が既存依存関係すら取得できず失敗する状態を確認 (`$HTTPS_PROXY/__agentproxy/status` で `policy denial` 確認)。上記「未検証」の変更はこの制約下で手動レビューのみ実施。ビルド可能な環境での再検証が必須。ユーザーが環境作成時のネットワークポリシーを見直せば解消できる可能性が高い | 🔴 要対応 | — |
 
 ### ソクラテス式問答 Round 5 — ecash.rs の 3 欠陥

@@ -92,6 +92,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - テスト計 239 (default) / 245 (`--features http`) 相当 (regression test 1件追加、
   引き続き**未検証** — 上記ビルド不能の制約は継続中)
 
+### Fixed (同日追加調査)
+
+- `pair::PairManager::prune_stale_discoveries`/`prune_completed_challenges` を
+  `main.rs::run_pair`/`run_earn` から呼ぶよう配線。両関数とも doc comment で
+  「定期的に呼び出すことで無限増長を防ぐ」ことが前提として明記されていたが
+  (`prune_completed_challenges`: 「問⑦への応答: 蓄積防止」)、どこからも呼ばれて
+  いなかった — `confidential::update_stats` と同型の「呼ぶべき場所に呼ぶ処理が
+  無い」パターン。同じ関数内で既に呼ばれている `session::prune_stale()` と
+  同じ立ち位置に追加。現状 `record_discovery`/`issue_capability_challenge` は
+  どの CLI 動詞からも呼ばれていないため `discovered`/`pending_challenges` は
+  常に空で今回の変更に観測可能な効果は無いが、v0.3 で両者が実結線された際の
+  無限増長を事前に防ぐ
+
 ## [0.2.13] - 2026-07-01
 
 v0.2.11/v0.2.12 で記録した Tier 3 (未構築 enum variant) の判断を実施。
