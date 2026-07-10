@@ -273,6 +273,15 @@ impl Session {
 ///
 /// v0.2: sync (main.rs が sync のため)。
 /// v0.3 で mDNS/Noise 結線時に async 化が必要なら tokio::sync::RwLock に戻す。
+///
+/// **ステータス**: `new`/`current`/`start`/`elapsed_seconds` はテスト済みだが、
+/// `main.rs` は代わりにファイルベースの `Session::save`/`load` ライフサイクルを
+/// 直接使っており、この in-memory RwLock 版マネージャーは現行 4 動詞のどこからも
+/// 使われていない。`end` に至ってはテストからも呼ばれていない (`docs/
+/// REACHABILITY_AUDIT.md` category c)。削除するかどうかは製品判断が必要 —
+/// 「v0.3 async化で使う予定の設計」なのか「ファイルベース方式に置き換わった後の
+/// 残骸」なのか、このコメント時点では確定できない。`docs/SURPLUS_AND_GAPS.md`
+/// §2.4 参照。
 pub struct SessionManager {
     current: Arc<RwLock<Option<Session>>>,
     start_time: Option<Instant>,
@@ -340,6 +349,14 @@ impl SessionManager {
 /// また `cleanup()` は呼ばない。cleanup は最後に停止フラグをリセットするため、
 /// 緊急停止のシグナルを即座に打ち消してしまう。ここではフラグを立てたまま残し、
 /// ポーリング中のループ（監視/デモ）が確実に停止を観測できるようにする。
+///
+/// **ステータス**: 上記の通り安全性を最優先に設計・過去に一度バグ修正されている
+/// にもかかわらず、現状どこからも呼ばれていない (テストも含め)。シグナルハンドラ
+/// や Ctrl-C ハンドラが未配線なため。`cleanup`/`is_stop_requested`/`get_status`/
+/// `list_sessions`/`format_session_list`/`Session::load`/`SessionManager::end` も
+/// 同様に呼び出し元ゼロ。「呼び出し元ゼロ」だけで削除すべきでない理由は
+/// `docs/SURPLUS_AND_GAPS.md` §2.4 / `docs/REACHABILITY_AUDIT.md` 参照 —
+/// 削除するか signal handler に配線するかは製品判断待ち。
 pub fn panic_stop() -> Result<()> {
     tracing::warn!("PANIC STOP triggered");
     // 真っ先に停止フラグ。後続が失敗してもポーリング側は止まれる。
