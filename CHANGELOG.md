@@ -105,6 +105,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   常に空で今回の変更に観測可能な効果は無いが、v0.3 で両者が実結線された際の
   無限増長を事前に防ぐ
 
+### Added (リサーチ更新)
+
+- **`docs/RESEARCH_UPDATE_2026-07.md`** — `docs/RESEARCH_IMPROVEMENTS.md`
+  (2026-06-05調査) から1ヶ月分の差分を WebSearch で調査。新規論文3件
+  (TensorCommitments arXiv:2602.12630 — LLaMA2でprover+0.97%/verifier+0.12%の
+  軽量検証、arXiv:2602.17223 — private inference手法の verified inference への
+  転用、arXiv:2501.05374 — GPU計算検証3手法の比較調査)、Iroh 1.0
+  (2026-06リリース) を libp2p の代替P2Pスタック候補として新規発見、
+  推論エンジン統合 (llama-cpp-rs vs mistral.rs) の比較検討を新設。
+  NVIDIA CC 実装の一次情報源を Corvex の本番事例 (Intel Trust Authority
+  によるCPU/GPU証明) + NVIDIA公式デプロイガイドv7.1に更新。
+  引用は全てWebSearchで実在確認済み。`docs/SURPLUS_AND_GAPS.md` §1 の
+  各GAP項目とcrossリンク
+
 ## [0.2.13] - 2026-07-01
 
 v0.2.11/v0.2.12 で記録した Tier 3 (未構築 enum variant) の判断を実施。

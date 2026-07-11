@@ -138,7 +138,8 @@ exit(1):     ロック競合・孤児セッション掃除失敗では出さな�
 - [`SECURITY.md`](SECURITY.md) — 現状の暗号学的成熟度 (何が本物で何がプレースホルダか), 信頼モデル, 脆弱性報告
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — 7 モジュール構造, 状態機械マップ, データフロー
 - [`docs/ASSESSMENT.md`](docs/ASSESSMENT.md) — 長所 / 短所 / 改善点の評価
-- [`docs/RESEARCH_IMPROVEMENTS.md`](docs/RESEARCH_IMPROVEMENTS.md) — 同種ソフト・arXiv 調査に基づく優先度バックログ
+- [`docs/RESEARCH_IMPROVEMENTS.md`](docs/RESEARCH_IMPROVEMENTS.md) — 同種ソフト・arXiv 調査に基づく優先度バックログ (2026-06-05 時点)
+- [`docs/RESEARCH_UPDATE_2026-07.md`](docs/RESEARCH_UPDATE_2026-07.md) — 上記の1ヶ月差分アップデート (新規論文3件・Iroh 1.0 等の新規検討事項)
 - [`docs/REACHABILITY_AUDIT.md`](docs/REACHABILITY_AUDIT.md) — `#![allow(dead_code)]` 配下 161 関数の到達可能性監査 (次回削除候補 29件)
 - [`docs/SURPLUS_AND_GAPS.md`](docs/SURPLUS_AND_GAPS.md) — 過剰(過去に削除/保持判断したもの)と不足(未実装・要判断)を機械可読形式で一覧化。後続の AI エージェント向け
 - [`examples/quickstart.sh`](examples/quickstart.sh) — 4 動詞クイックスタート
