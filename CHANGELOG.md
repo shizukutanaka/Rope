@@ -118,6 +118,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   によるCPU/GPU証明) + NVIDIA公式デプロイガイドv7.1に更新。
   引用は全てWebSearchで実在確認済み。`docs/SURPLUS_AND_GAPS.md` §1 の
   各GAP項目とcrossリンク
+- **`docs/P2P_IMPLEMENTATION_READINESS.md`** — 最大の構造的ギャップ (実P2P
+  I/O 皆無) を、ネットワーク制約解消後すぐ着手できる実行手順書として
+  事前設計。libp2p/Iroh の選定基準比較表、段階的ロールアウト順序
+  (mDNS発見→Noise鍵交換→NAT越え→proof-of-capability結線)、影響範囲マップ
+  (変更要ファイル vs 無傷のまま残る236件超の既存テスト)、Definition of Done
+  を記載。`pair.rs` の状態機械・公開APIシグネチャは変更不要で、各関数の
+  内部実装のみ実I/Oに差し替える設計であることを明記 (既存の型/テスト資産を
+  最大限再利用する方針)
 
 ## [0.2.13] - 2026-07-01
 
