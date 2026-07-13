@@ -126,6 +126,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   を記載。`pair.rs` の状態機械・公開APIシグネチャは変更不要で、各関数の
   内部実装のみ実I/Oに差し替える設計であることを明記 (既存の型/テスト資産を
   最大限再利用する方針)
+- **`docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md`** — Cashu 盲目署名 (BDHKE)
+  の実行手順書。Cashu 公式 NUT-00 仕様 (`cashubtc/nuts` リポジトリ) を
+  WebFetch で直接取得し、hash_to_curve/blinding/unblinding の数式を検証済み
+  (C = C_ - rK = kY)。`secp256k1` (C FFI, 実績重視) vs `k256` (pure Rust,
+  RustCrypto系) の比較検討で `k256` を推奨 (既存の `ed25519-dalek`/
+  `curve25519-dalek` と同エコシステムで一貫性、`unsafe_code = deny` 方針との
+  親和性)。5段階のロールアウト順序 (hash_to_curve→blinding→unblinding→
+  NUT-07→DLEQ/P2PK) と、`Proof` 構造体への `blinding_factor` フィールド
+  追加時の後方互換性上の注意点を記載
 
 ## [0.2.13] - 2026-07-01
 
