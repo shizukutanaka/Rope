@@ -1,22 +1,42 @@
 # 現段階の評価 — 長所 / 短所 / 改善点
 
-> 評価日: 2026-06-23 (初版) / 更新: 2026-07-01 (v0.2.3 反映) /
+> 評価日: 2026-06-23 (初版) / 更新: 2026-07-10 (v0.2.13 + Unreleased 分反映) /
 > 対象: Rope (branch `claude/deepresearch-ultrathink-improve-wnYtn`)
 > 関連: [`RESEARCH_IMPROVEMENTS.md`](RESEARCH_IMPROVEMENTS.md)（優先度バックログ）,
-> [`CATEGORY_RESEARCH.md`](CATEGORY_RESEARCH.md)（10カテゴリ調査）
+> [`RESEARCH_UPDATE_2026-07.md`](RESEARCH_UPDATE_2026-07.md)（1ヶ月差分）,
+> [`CATEGORY_RESEARCH.md`](CATEGORY_RESEARCH.md)（10カテゴリ調査）,
+> [`SURPLUS_AND_GAPS.md`](SURPLUS_AND_GAPS.md)（機械可読な過不足一覧）
 
 ## 長所 (Strengths)
 
-1. **設計の極端な集中** — 4 動詞 / 7 core モジュール。main.rs 574 行。
+1. **設計の極端な集中** — 4 動詞 / 7 core モジュール。main.rs 652 行。
    競合機能の交点 (他人GPU × GPU TEE × ecash少額決済) に wedge を絞れている。
 2. **状態機械が明快** — `ecash` / `pair` / `confidential` / `intent` が型と状態遷移で
    表現され、純ロジックとして単体テスト可能。I/O と分離されている。
-3. **品質ゲートが厳格** — `clippy -D warnings` / `fmt --check` / `unsafe_code = deny` を
-   CI 級に強制。テスト 225 (default) / 231 (http)、全 4 動詞 graceful exit。
+3. **ローカル品質ゲートが厳格** — `clippy -D warnings` / `fmt --check` /
+   `unsafe_code = deny` を crate 全体に強制。テスト 239+ (default) / 245+
+   (http、本セッションの regression test 込みで未検証)。全 4 動詞 graceful
+   exit。**ただし CI 自体は `.github/ci.yml.disabled` のまま未有効化** —
+   「ローカルで厳格」と「自動化されている」は別物である点は誤解しないこと
+   (詳細: 改善点テーブルの CI 行)。
 4. **依存最小主義** — HTTP は opt-in feature、edition2024 を避けた上限固定で
    ビルド再現性を確保。
 5. **正直なフォールバック設計** — TEE 非対応や検証なしを「できるフリ」せず、
-   明示的に拒否/注記する方向へ転換中（本セッションの改良）。
+   明示的に拒否/注記する方向へ転換済み。README冒頭のデモにも「これは
+   シミュレーション」と明記 (`README.md:28-34`)、`SECURITY.md` で
+   「本物として機能している暗号」と「まだプレースホルダの暗号」を
+   明確に分離して開示。
+6. **未結線コードが自己文書化されている** — `#![allow(dead_code)]` 配下
+   161 関数を全数調査した `REACHABILITY_AUDIT.md`、その要約と判断根拠を
+   まとめた `SURPLUS_AND_GAPS.md`、さらに主要な「テスト済みだが到達不能」
+   構造体 (`SessionManager`/`EcashManager`/`PairManager`) 自体に
+   doc comment でステータスを明記済み。「なぜこのコードが呼ばれていないのか」
+   を推測せずコード自身から読み取れる状態になっている。
+7. **次の実装に必要な調査が事前に済んでいる** — 最大の2ギャップ (P2P実結線、
+   Cashu BDHKE) について、ネットワーク制約解消後すぐ着手できる実行手順書
+   (`P2P_IMPLEMENTATION_READINESS.md`, `CASHU_BDHKE_IMPLEMENTATION_READINESS.md`)
+   を用意済み。BDHKEの数式はCashu公式仕様を直接検証、P2Pはlibp2p/Iroh
+   双方の比較検討まで完了している。
 
 ## 短所 (Weaknesses)
 
@@ -84,10 +104,11 @@
 | **`DiscoveryMethod::Contact` 削除 (構築経路ゼロ)** | ✅ 改良済 | `9ebcf65` |
 | **`TrustLevel::OwnDevice` の doc comment 明記 (未結線の判定分岐、保持)** | ✅ 改良済 | `9ebcf65` |
 | **`SessionStatus` の doc comment 明記 (v0.3 実TEEセッション待ち、保持)** | ✅ 改良済 | `9ebcf65` |
-| **QR 入力経路 (`accept_pairing_token`) の `.expect()` を `.context(...)?` に強化** | ⚠️ 改良済・**未検証** (下記参照) | (this) |
-| **`ARCHITECTURE.md` 統計テーブルの同期 (v0.2.5→v0.2.13 時点値)** | ✅ 改良済 | (this) |
-| **README「60秒デモ」がシミュレーションである旨の明示** | ✅ 改良済 | (this) |
-| **`load_confidential/load_pair` の破損vs未設定区別を調査** | ✅ 判定済 (既に `load_or_recover` が対応済、修正不要) | (this) |
+| **QR 入力経路 (`accept_pairing_token`) の `.expect()` を `.context(...)?` に強化** | ⚠️ 改良済・**未検証** (下記参照) | `c8a8061` |
+| **`ARCHITECTURE.md` 統計テーブルの同期 (v0.2.5→v0.2.13 時点値)** | ✅ 改良済 | `c8a8061` |
+| **README「60秒デモ」がシミュレーションである旨の明示** | ✅ 改良済 | `c8a8061` |
+| **`load_confidential/load_pair` の破損vs未設定区別を調査** | ✅ 判定済 (既に `load_or_recover` が対応済、修正不要) | `c8a8061` |
+| **`SECURITY.md` 新設** (本物/プレースホルダ暗号の分離開示、信頼モデル) | ✅ 改良済 | `e068e2d` |
 | NAT 越え (libp2p DCUtR) / Noise 実結線 | ⏳ 大・新規依存要 (この環境では crates.io 制約で実施不能と判明) | — |
 | 検証本体 (VeriLLM 風 再実行 / TOPLOC LSH) | ⏳ 大 (実推論エンジン自体が未実装) | — |
 | BDHKE 実装 (secp256k1、現状は unblinding プレースホルダ) | ⏳ 大・新規依存要 (この環境では crates.io 制約で実施不能と判明) | — |
@@ -95,10 +116,15 @@
 | **CI 有効化** (`.github/workflows/` への移動) | ⏳ 要ユーザー判断 (secrets アクセス) — auto mode 許可分類器が明示同意無しとしてブロック。`.disabled` 内容は改善済み (全ブランチ trigger 化 + http feature ジョブ追加) | — |
 | pair.rs QR/TOFU 系統計7件の表示配線 (診断情報過多の懸念、見送り) | ⏳ 次回判断 | — |
 | **`#![allow(dead_code)]` (`lib.rs`/`main.rs`) の到達可能性監査**: 161 pub fn を4動詞からの呼び出しチェーンで分類 (到達68・test-only 64・呼出ゼロ15・連鎖デッド14)。詳細: [`docs/REACHABILITY_AUDIT.md`](REACHABILITY_AUDIT.md) | ✅ 監査完了 | — |
-| **呼出ゼロ15件の個別再検証・実施**: 単純に陳腐化した4件を削除 (`load_private_key`/`load_config`/`ensure_initialized`/`get_plan`)、1件は削除ではなく配線 (`confidential::update_stats` — `format_confidential` 表示用キャッシュが常に0固定だった)、2件は設計意図ありと判断し保持 (`with_region`/`is_cpu_tee`) | ✅ 改良済 | (this) |
+| **呼出ゼロ15件の個別再検証・実施**: 単純に陳腐化した4件を削除 (`load_private_key`/`load_config`/`ensure_initialized`/`get_plan`)、1件は削除ではなく配線 (`confidential::update_stats` — `format_confidential` 表示用キャッシュが常に0固定だった)、2件は設計意図ありと判断し保持 (`with_region`/`is_cpu_tee`) | ✅ 改良済 | `a87d456` |
 | **`session.rs` の10件クラスター (`SessionManager`/`panic_stop` 系)**: 個別に読んだ結果、安全性クリティカル (緊急停止) / 設計意図明記 (v0.3 async化コメント) のコードと判明。「呼出ゼロ」のみを根拠に削除すべきでないと判断し、製品判断が必要なため保持 | ⏳ 次回、製品判断が必要 | — |
-| **`pair::prune_stale_discoveries`/`prune_completed_challenges` の配線**: doc comment が「定期的に呼び出すこと」を前提としていたが呼び出し元ゼロだった (`update_stats` と同型)。`run_pair`/`run_earn` から呼ぶよう配線 | ✅ 改良済 | (this) |
-| **⚠️ 環境の重大な制約発見**: このセッションのコンテナは新規作成で依存クレートキャッシュが空、かつネットワークポリシーが `static.crates.io`/`crates.io` を 403 でブロック — `cargo build` が既存依存関係すら取得できず失敗する状態を確認 (`$HTTPS_PROXY/__agentproxy/status` で `policy denial` 確認)。上記「未検証」の変更はこの制約下で手動レビューのみ実施。ビルド可能な環境での再検証が必須。ユーザーが環境作成時のネットワークポリシーを見直せば解消できる可能性が高い | 🔴 要対応 | — |
+| **`pair::prune_stale_discoveries`/`prune_completed_challenges` の配線**: doc comment が「定期的に呼び出すこと」を前提としていたが呼び出し元ゼロだった (`update_stats` と同型)。`run_pair`/`run_earn` から呼ぶよう配線 | ✅ 改良済 | `76f32e3` |
+| **`refresh_expired_attestations`/`process_deadman`/`check_idle_streams` の配線可否を個別調査**: 前者はTEEルーティング安全性に無関係と判明 (`freshest_verified_instance`が独自に鮮度チェック) のため見送り、後2者は操作対象データを作るCLI経路自体が無いため見送り | ✅ 判定済 (見送り、根拠記録) | `ca59ca3` |
+| **`docs/SURPLUS_AND_GAPS.md` 新設**: 過剰/不足の判断を機械可読形式で集約、後続AIエージェント向け | ✅ 改良済 | `72afd51` |
+| **`SessionManager`/`EcashManager`/`PairManager` への status doc comment 追加**: 「テスト済みだが到達不能」な理由をコード自身に明記 | ✅ 改良済 | `e7bd2b9`, `54e7265`, `84512a9` |
+| **`docs/RESEARCH_UPDATE_2026-07.md` 新設**: WebSearchで1ヶ月分の差分調査。TensorCommitments/Iroh 1.0等の新規発見 | ✅ 改良済 | `75aa636` |
+| **`docs/P2P_IMPLEMENTATION_READINESS.md`/`CASHU_BDHKE_IMPLEMENTATION_READINESS.md` 新設**: 最大2ギャップの実装手順書を事前準備。BDHKEはCashu公式仕様(NUT-00)を直接検証 | ✅ 改良済 | `e79dde8`, `6c0d408` |
+| **⚠️ 環境の重大な制約発見**: このセッションのコンテナは新規作成で依存クレートキャッシュが空、かつネットワークポリシーが `static.crates.io`/`crates.io` を 403 でブロック — `cargo build` が既存依存関係すら取得できず失敗する状態を確認 (`$HTTPS_PROXY/__agentproxy/status` で `policy denial` 確認)。「未検証」表記の変更は全てこの制約下で手動レビューのみ実施。ビルド可能な環境での再検証が必須。ユーザーが環境作成時のネットワークポリシーを見直せば解消できる可能性が高い (本セッション終盤でも再確認したが変化なし) | 🔴 要対応 | — |
 
 ### ソクラテス式問答 Round 5 — ecash.rs の 3 欠陥
 
