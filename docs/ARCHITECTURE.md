@@ -8,7 +8,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  CLI (main.rs, 607 行 — lib.rs 経由で下記を利用)      │
+│  CLI (main.rs, 652 行 — lib.rs 経由で下記を利用)      │
 │                                                     │
 │  rope          → first_run (wow moment)             │
 │  rope pair     → pair + session (mDNS / QR / Noise) │
@@ -156,9 +156,10 @@ rope/
 ├── Cargo.toml
 ├── LICENSE             # MIT
 ├── README.md
+├── SECURITY.md         # 暗号学的成熟度の開示 (本物/プレースホルダの分離), 信頼モデル
 ├── .gitignore
 ├── src/
-│   ├── main.rs         # CLI (607 行, 4 動詞。lib.rs 経由で core/net を利用)
+│   ├── main.rs         # CLI (652 行, 4 動詞。lib.rs 経由で core/net を利用)
 │   ├── lib.rs          # ライブラリクレート境界 (pub mod core; pub mod net;)
 │   ├── core/
 │   │   ├── mod.rs
@@ -173,11 +174,16 @@ rope/
 │       ├── mod.rs
 │       └── cashu_mint.rs
 ├── docs/
-│   ├── ARCHITECTURE.md          # この文書
-│   ├── ASSESSMENT.md            # 長所/短所/改善点の評価
-│   ├── RESEARCH_IMPROVEMENTS.md # 同種ソフト・arXiv 調査の優先度バックログ
-│   ├── CATEGORY_RESEARCH.md     # カテゴリ別調査
-│   └── IMPROVEMENT_SYNTHESIS.md # v0.3 統合改善案
+│   ├── ARCHITECTURE.md              # この文書
+│   ├── ASSESSMENT.md                # 長所/短所/改善点の評価
+│   ├── RESEARCH_IMPROVEMENTS.md     # 同種ソフト・arXiv 調査の優先度バックログ (2026-06-05)
+│   ├── RESEARCH_UPDATE_2026-07.md   # 上記の1ヶ月差分アップデート
+│   ├── CATEGORY_RESEARCH.md         # カテゴリ別調査
+│   ├── IMPROVEMENT_SYNTHESIS.md     # v0.3 統合改善案
+│   ├── REACHABILITY_AUDIT.md        # #![allow(dead_code)] 配下161関数の到達可能性監査
+│   ├── SURPLUS_AND_GAPS.md          # 過剰/不足を機械可読形式で一覧化 (AIエージェント向け)
+│   ├── P2P_IMPLEMENTATION_READINESS.md      # 実P2P結線の実行手順書 (libp2p/Iroh比較)
+│   └── CASHU_BDHKE_IMPLEMENTATION_READINESS.md  # BDHKE実装の実行手順書 (NUT-00検証済み)
 └── examples/
     ├── quickstart.sh
     └── library_usage.rs
