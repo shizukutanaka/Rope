@@ -156,6 +156,7 @@ rope/
 ├── Cargo.toml
 ├── LICENSE             # MIT
 ├── README.md
+├── CHANGELOG.md        # 変更履歴 (SemVer)
 ├── SECURITY.md         # 暗号学的成熟度の開示 (本物/プレースホルダの分離), 信頼モデル
 ├── .gitignore
 ├── src/
