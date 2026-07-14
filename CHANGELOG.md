@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Verified (Workflow による敵対的再検証)
+
+- 本セッションで削除した4関数 (`load_private_key`/`load_config`/
+  `ensure_initialized`/`get_plan`) の「呼び出し元ゼロ」を、8エージェント
+  構成の Workflow で独立に再検証。全4件 CONFIRMED (削除前から呼び出し元
+  ゼロ、削除は安全)。詳細: `docs/REACHABILITY_AUDIT.md` 第3回フォローアップ
+
 ### Fixed (Workflow による敵対的レビューで検出・修正)
 
 - **`confidential::ConfidentialManager::perform_attestation` が
