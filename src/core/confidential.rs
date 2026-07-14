@@ -544,10 +544,25 @@ impl ConfidentialManager {
         }
         // active_tee_instances は tee_instances の実際の status から都度再計算する
         // 必要がある (単純な +=/-= では Running↔Error の往復を正しく追えない)。
-        // update_stats() 自体は元々どこからも呼ばれておらず、format_confidential が
-        // 表示する active_tee_instances が常に 0 のまま固定されていた
+        // 元々どこからも呼ばれておらず、format_confidential が表示する
+        // active_tee_instances が常に 0 のまま固定されていた
         // (死蔵面監査で発見、TeeStatus::Running 未代入バグ (v0.2.11) と同根)。
-        self.update_stats();
+        //
+        // 注意: ここで update_stats() をまるごと呼んではいけない。update_stats()
+        // は active_sessions も無条件に再計算するが、SessionStatus::Active は
+        // どこからも代入されない (SessionStatus の doc comment 参照) ため、
+        // その再計算は常に 0 を返す。create_secure_session が +=1 で維持している
+        // active_sessions を、以降の perform_attestation 呼び出し (2台目の GPU
+        // attest、定期再検証等、ごく普通に起こる) が黙って 0 に巻き戻してしまう
+        // 回帰があった (Workflow による敵対的レビューで検出・確認済み)。
+        // active_tee_instances だけをここで直接再計算し、active_sessions には
+        // 触れない。
+        self.stats.active_tee_instances = self
+            .tee_instances
+            .iter()
+            .filter(|i| i.status == TeeStatus::Running)
+            .count() as u32;
+        self.updated_at = Utc::now();
 
         Ok(report)
     }
@@ -1135,6 +1150,35 @@ mod tests {
             m.stats.active_tee_instances, 1,
             "stats.active_tee_instances (format_confidential が表示するキャッシュ値) は\
              perform_attestation 後に更新されるべき"
+        );
+    }
+
+    /// 回帰テスト (Workflow による敵対的レビューで検出): perform_attestation が
+    /// 内部で update_stats() をまるごと呼ぶ実装だった場合、update_stats() は
+    /// active_sessions も無条件に再計算する。SessionStatus::Active はどこからも
+    /// 代入されないため常に 0 を返し、create_secure_session が正しく +=1 した
+    /// active_sessions を、後続の perform_attestation 呼び出し (2台目のGPU attest
+    /// 等、ごく普通に起こる) が黙って 0 に巻き戻してしまっていた。
+    #[test]
+    fn test_perform_attestation_does_not_reset_active_sessions() {
+        let mut m = ConfidentialManager::default();
+        let inst1 =
+            m.create_tee_instance("gpu-1", "H100", TeeType::NvidiaGpuTee, SecurityLevel::High);
+        m.perform_attestation(&inst1.id).unwrap();
+        m.create_secure_session(&inst1.id, "alice").unwrap();
+        assert_eq!(
+            m.stats.active_sessions, 1,
+            "create_secure_session 直後は active_sessions が 1 であるべき"
+        );
+
+        // 2台目のGPUを attest する、ごく普通のその後の操作
+        let inst2 =
+            m.create_tee_instance("gpu-2", "H100", TeeType::NvidiaGpuTee, SecurityLevel::High);
+        m.perform_attestation(&inst2.id).unwrap();
+
+        assert_eq!(
+            m.stats.active_sessions, 1,
+            "後続の perform_attestation 呼び出しが active_sessions を巻き戻してはいけない"
         );
     }
 

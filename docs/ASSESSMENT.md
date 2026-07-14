@@ -125,6 +125,7 @@
 | **`docs/RESEARCH_UPDATE_2026-07.md` 新設**: WebSearchで1ヶ月分の差分調査。TensorCommitments/Iroh 1.0等の新規発見 | ✅ 改良済 | `75aa636` |
 | **`docs/P2P_IMPLEMENTATION_READINESS.md`/`CASHU_BDHKE_IMPLEMENTATION_READINESS.md` 新設**: 最大2ギャップの実装手順書を事前準備。BDHKEはCashu公式仕様(NUT-00)を直接検証 | ✅ 改良済 | `e79dde8`, `6c0d408` |
 | **⚠️ 環境の重大な制約発見**: このセッションのコンテナは新規作成で依存クレートキャッシュが空、かつネットワークポリシーが `static.crates.io`/`crates.io` を 403 でブロック — `cargo build` が既存依存関係すら取得できず失敗する状態を確認 (`$HTTPS_PROXY/__agentproxy/status` で `policy denial` 確認)。「未検証」表記の変更は全てこの制約下で手動レビューのみ実施。ビルド可能な環境での再検証が必須。ユーザーが環境作成時のネットワークポリシーを見直せば解消できる可能性が高い (本セッション終盤でも再確認したが変化なし) | 🔴 要対応 | — |
+| **Workflow (8エージェント) による敵対的レビューで実バグを発見・修正**: `perform_attestation` の `update_stats()` 丸ごと呼び出しが `stats.active_sessions` を黙って0に巻き戻す回帰。単独の手動レビューでは見逃していたが、複数エージェントによる独立検証で確認。`active_tee_instances` のみを直接再計算するよう修正、回帰テスト追加。**本セッションの単独レビューだけでは見逃す欠陥が実在することを示す実例** — 未検証コミット全体への信頼度を下げる材料 | ✅ 改良済 | (this) |
 
 ### ソクラテス式問答 Round 5 — ecash.rs の 3 欠陥
 

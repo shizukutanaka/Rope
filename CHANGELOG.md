@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (Workflow による敵対的レビューで検出・修正)
+
+- **`confidential::ConfidentialManager::perform_attestation` が
+  `stats.active_sessions` を黙って 0 に巻き戻す回帰** — v0.2.11由来の
+  `update_stats()` ワイヤリング修正 (このセッションの以前のコミット) が
+  `self.update_stats()` を丸ごと呼んでいたが、`update_stats()` は
+  `active_tee_instances` だけでなく `active_sessions` も無条件に
+  再計算する。`SessionStatus::Active` はどこからも代入されない
+  (既知の別問題、`SessionStatus` の doc comment 参照) ため、この
+  再計算は常に 0 を返す。`create_secure_session` が `+=1` で正しく
+  維持していた `active_sessions` を、後続の `perform_attestation`
+  呼び出し (2台目のGPU attest、定期再検証等、ごく普通に起こる操作)
+  が黙って 0 に巻き戻してしまっていた。`format_confidential` が
+  この値を「アクティブセッション」として表示するため、ユーザー
+  可視の表示バグでもあった。
+  修正: `perform_attestation` は `update_stats()` を丸ごと呼ぶ代わりに
+  `active_tee_instances` だけを直接再計算し、`active_sessions` には
+  触れないよう変更。回帰テスト追加
+  (`test_perform_attestation_does_not_reset_active_sessions`)。
+  **この回帰は本セッションの単独レビューでは見逃していた** —
+  Ultracode 有効化後、8エージェントによる Workflow ベースの敵対的
+  レビュー (このセッションのコンパイラ未検証コミット全件を対象) で
+  初めて検出・確認された。今回のセッションで手動レビューのみに
+  頼っていた他の変更についても、同種の見落としが残っている
+  可能性を示唆する結果
+
 **⚠️ この節の変更はコンパイラ未検証。** 今回のセッションのコンテナはネットワーク
 ポリシーにより `static.crates.io`/`crates.io` への接続が 403 (policy denial) で
 拒否され、かつ新規作成コンテナのため依存クレートキャッシュもゼロ — 既存の
