@@ -216,14 +216,17 @@ against HEAD before trusting anything past `830d8c4`.
   that heuristic was correct for §2.1's items and wrong-shaped for this
   cluster.**
 
-### 2.5 Hardcoded sats↔USD conversion rate `[OPEN, low priority]`
-- `src/main.rs:353` and `src/core/first_run.rs:506` both hardcode
-  `/ 100_000_000.0 * 50_000.0` (implies 1 BTC = $50,000). Consistent between
-  both sites, commented as an approximation. Not a bug worth fixing now:
-  no real payment is wired yet (§2.3), and there's no live price-feed
-  dependency to replace it with while §0 blocks new crates. Worth revisiting
-  once real ecash lands — a stale hardcoded price directly miscalibrates
-  budget enforcement once money is real.
+### 2.5 Hardcoded sats↔USD conversion rate `[PARTIALLY ADDRESSED — DRY, still a fixed rate]`
+- Previously `src/main.rs` and `src/core/first_run.rs` both hardcoded
+  `/ 100_000_000.0 * 50_000.0` (implies 1 BTC = $50,000) as separate magic
+  numbers. **Consolidated (Unreleased) into a single `core::sats_to_usd`
+  helper with named constants `SATS_PER_BTC`/`APPROX_USD_PER_BTC` in
+  `core/mod.rs`** — so the future live-price-feed change touches exactly one
+  site. The rate itself is *still* a fixed approximation (no price feed while
+  §0 blocks new crates); that part remains OPEN and must be swapped for a
+  dynamic source when real ecash lands (§2.3), since a stale hardcoded price
+  miscalibrates budget enforcement once money is real. The DRY consolidation
+  just makes that future swap a one-line change instead of a two-site hunt.
 
 ### 2.6 External-service commitments with zero current callers `[OPEN, judgment call recorded, not acted on]`
 - `confidential.rs:132-134` `attestation_service_url()` returns real,

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+**⚠️ この節の変更はコンパイラ未検証** (ビルド不能の制約は `[0.2.14]` から継続、
+`docs/SURPLUS_AND_GAPS.md` §0 参照)。入念な手動レビュー (型シグネチャ・参照解決・
+clippy lint の目視確認) のみ実施。ビルド可能な環境での再検証が必須。
+
+### Changed
+
+- **sats→USD 換算を単一ヘルパー `core::sats_to_usd` へ集約** — 従来
+  `main.rs` と `first_run.rs` に `sats as f64 / 100_000_000.0 * 50_000.0`
+  というマジックナンバー式が重複していた (`docs/SURPLUS_AND_GAPS.md` §2.5 で
+  指摘済み)。`core/mod.rs` に名前付き定数 `SATS_PER_BTC`/`APPROX_USD_PER_BTC`
+  と `sats_to_usd(sats: u64) -> f64` を新設し、両呼び出し元をこれに差し替え。
+  v0.3 で実価格フィードを導入する際に触るべき箇所が 1 点に集約される。
+  既存の `core::short` と同じ共有ヘルパーパターンを踏襲。回帰テスト2件追加
+  (換算値の固定 + `short` の UTF-8 境界テスト)。新規依存なし
+
 ## [0.2.14] - 2026-07-16
 
 ### Verified (Workflow による敵対的再検証)

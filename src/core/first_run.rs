@@ -503,7 +503,7 @@ impl<'a> FirstRunOrchestrator<'a> {
             &self.first_run.user_display_name,
         )
         .with_budget(
-            cfg.demo_budget_sats as f64 / 100_000_000.0 * 50_000.0, // sats → USD 概算
+            super::sats_to_usd(cfg.demo_budget_sats), // sats → USD 概算
             BudgetEnforcement::Hard,
         )
         .with_privacy(Privacy::ConfidentialCompute);

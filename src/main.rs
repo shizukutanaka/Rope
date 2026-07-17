@@ -349,10 +349,7 @@ fn run_inference(
         &user,
     )
     .with_verification(verification)
-    .with_budget(
-        budget_sats as f64 / 100_000_000.0 * 50_000.0,
-        BudgetEnforcement::Hard,
-    )
+    .with_budget(core::sats_to_usd(budget_sats), BudgetEnforcement::Hard)
     .with_privacy(privacy);
 
     println!("💭 Intent 構築済 ({})", core::short(&intent.id, 8));
