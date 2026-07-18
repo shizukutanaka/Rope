@@ -181,4 +181,11 @@ API を確認すること。
       「未実装のまま」の記述を削除
 - [ ] `SECURITY.md` の「まだ暗号学的に機能していないもの」表からBDHKE行を削除
 - [ ] `docs/SURPLUS_AND_GAPS.md` §1.1 の該当箇所を「[DONE]」に更新
+- [ ] **返金経路の proof 復元** (`docs/SURPLUS_AND_GAPS.md` §1.8): `close_stream`
+      (`ecash.rs:1030`) / `refund_escrow` (`ecash.rs:837`, `簡略化` コメント) /
+      `resolve_dispute` PayerWins・Split (`ecash.rs:883,890`) は現状
+      `wallet.total_sats += 返金額` のみで proof バケットを復元しない。
+      実 mint 結線後は返金を **実 mint swap による proof 再発行** に置換し、
+      `total_sats == Σ proofs` の不変条件を返金後も維持すること
+      (放置すると「表示されるが使えない残高」になる)。§1.8 を「[DONE]」に更新
 - [ ] 実 mint (testnet) との相互運用を1回以上確認 (§5 参照)

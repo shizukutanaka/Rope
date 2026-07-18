@@ -123,6 +123,38 @@ against HEAD before trusting anything past `830d8c4`.
   (CHANGELOG `[0.2.12]`): cramming 7 diagnostic counters into a user-facing
   status display was judged to hurt readability more than it helps.
 
+### 1.8 Refund paths credit `wallet.total_sats` without restoring proofs — invariant breaks after any refund `[OPEN, latent; harmless while §2.3 keeps ecash CLI-unreachable, MUST fix with real mint in v0.3]`
+- Found by careful reading of the ecash money paths (2026-07, this session).
+- The wallet has two representations of balance that are supposed to agree:
+  `wallet.total_sats` (a scalar) and `Σ` of proof amounts across
+  `wallet.proofs_by_mint` (the actual bearer tokens). The **credit** paths
+  keep them in sync — `mint_tokens` (`ecash.rs:508-515`) and `receive_proofs`
+  (`ecash.rs:613-618`) both push proofs into a bucket AND add the same amount
+  to `total_sats`. `lock_funds` (`ecash.rs:715-753`) also keeps them in sync:
+  it removes `amount_sats` worth of proofs from the bucket (re-issuing
+  power-of-two change) AND subtracts `amount_sats` from `total_sats`.
+- But the **refund** paths only touch the scalar:
+  - `close_stream` (`ecash.rs:1030`): `self.wallet.total_sats += refund;`
+  - `refund_escrow` (`ecash.rs:837`): `self.wallet.total_sats += e.amount_sats;`
+    (comment literally says `簡略化` = "simplified")
+  - `resolve_dispute` PayerWins/Split (`ecash.rs:883,890`):
+    `total_sats += amount` / `amount / 2`
+  None of these restore proofs to `proofs_by_mint`. So after any refund,
+  `total_sats > Σ proofs` by the refunded amount.
+- Concrete consequence once ecash is wired (§2.3): the refunded balance shows
+  up in `total_sats` (the displayed balance, e.g. `format_ecash`) but is
+  **unspendable** — a later `open_stream`/`open_escrow` calls `lock_funds`,
+  which checks the *proof bucket* (`bucket_total < amount_sats` → bails
+  "proof 残高が不足"), not `total_sats`. Fails closed (no money created), but
+  the user sees a balance they can't actually use.
+- Why it's harmless *today*: the entire `EcashManager` mutation API is
+  unreachable from any CLI verb (§2.3), so no refund is ever executed against
+  a real wallet in the current build.
+- Correct v0.3 fix: refunds must re-issue proofs via a real mint swap (the
+  proper Cashu flow), not just bump the scalar — which is exactly why the
+  `簡略化` comment exists. Cross-referenced from
+  `docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md` Definition of Done.
+
 ---
 
 ## 2. SURPLUS (過剰) — code/commitments beyond what's currently backed by use or roadmap

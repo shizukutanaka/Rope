@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `docs/SURPLUS_AND_GAPS.md` §0 参照)。入念な手動レビュー (型シグネチャ・参照解決・
 clippy lint の目視確認) のみ実施。ビルド可能な環境での再検証が必須。
 
+### Documented (careful-reading finding, no code change)
+
+- **返金経路が `wallet.total_sats` を増やすが proof を復元しない潜在的不整合を
+  発見・記録** — ecash のマネー経路を精読した結果、`close_stream`
+  (`ecash.rs:1030`) / `refund_escrow` (`ecash.rs:837`) / `resolve_dispute`
+  (`ecash.rs:883,890`) が返金時に scalar (`total_sats`) だけを増やし proof
+  バケットを復元しないことを確認。`lock_funds` は proof 合計をチェックするため、
+  実 ecash 結線後は「表示されるが再使用できない残高」になる。現状 ecash API は
+  どの動詞からも到達しない (§2.3) ため実害ゼロ。`docs/SURPLUS_AND_GAPS.md` に
+  §1.8 として file:line 付きで記録し、`CASHU_BDHKE_IMPLEMENTATION_READINESS.md`
+  の Definition of Done に「返金は実 mint swap による proof 再発行に置換」を追加。
+  信用側 (`mint_tokens`/`receive_proofs`/`lock_funds`) は不変条件を維持しており
+  問題ないことも確認済み
+
 ### Added
 
 - **`CONTRIBUTING.md`** — 公開OSSとして GitHub の Community Standards が
