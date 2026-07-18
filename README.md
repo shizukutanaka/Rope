@@ -135,6 +135,7 @@ exit(1):     ロック競合・孤児セッション掃除失敗では出さな�
 ## ドキュメント
 
 - [`CHANGELOG.md`](CHANGELOG.md) — 変更履歴 (SemVer)
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — 貢献ガイド (設計原則・品質ゲート・テスト方針)
 - [`SECURITY.md`](SECURITY.md) — 現状の暗号学的成熟度 (何が本物で何がプレースホルダか), 信頼モデル, 脆弱性報告
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — 7 モジュール構造, 状態機械マップ, データフロー
 - [`docs/ASSESSMENT.md`](docs/ASSESSMENT.md) — 長所 / 短所 / 改善点の評価

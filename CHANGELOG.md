@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `docs/SURPLUS_AND_GAPS.md` §0 参照)。入念な手動レビュー (型シグネチャ・参照解決・
 clippy lint の目視確認) のみ実施。ビルド可能な環境での再検証が必須。
 
+### Added
+
+- **`CONTRIBUTING.md`** — 公開OSSとして GitHub の Community Standards が
+  期待する貢献ガイドを新設。設計原則 (Focus/Subtraction/正直なフォールバック)、
+  マージ前に通すべき品質ゲート全コマンド、`unsafe` 禁止・MSRV 1.75・
+  edition2024 回避の依存方針、回帰テスト必須の方針、および「一部履歴は
+  コンパイラ未検証」の注記を明文化。純ドキュメント追加
+
 ### Changed
 
 - **sats→USD 換算を単一ヘルパー `core::sats_to_usd` へ集約** — 従来
