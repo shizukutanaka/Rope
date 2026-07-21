@@ -27,6 +27,12 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Added
 
+- **`CLAUDE.md`** (repo ルート) — Claude Code がセッション開始時に自動ロードする
+  Opus/Sonnet 向け作業指示書を新設。長所 (壊すな) 7項目・短所 8項目 (§アンカー付き)・
+  改善案 (優先順+ブロッカー種別) を圧縮し、作業規範 (未検証の明記、単独レビューを
+  過信しない=active_sessions 回帰の実例、file:line 発見記録、後方互換、正直さの文化) と
+  14 ドキュメントの索引を収録。既存の分散した長所短所改善情報 (ASSESSMENT.md /
+  SURPLUS_AND_GAPS.md / readiness 群) への単一の入口として機能する。純ドキュメント追加
 - **`CONTRIBUTING.md`** — 公開OSSとして GitHub の Community Standards が
   期待する貢献ガイドを新設。設計原則 (Focus/Subtraction/正直なフォールバック)、
   マージ前に通すべき品質ゲート全コマンド、`unsafe` 禁止・MSRV 1.75・

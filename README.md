@@ -134,6 +134,7 @@ exit(1):     ロック競合・孤児セッション掃除失敗では出さな�
 
 ## ドキュメント
 
+- [`CLAUDE.md`](CLAUDE.md) — **AI エージェント (Opus/Sonnet) 向けの入口**。長所短所改善案の要約と作業規範
 - [`CHANGELOG.md`](CHANGELOG.md) — 変更履歴 (SemVer)
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — 貢献ガイド (設計原則・品質ゲート・テスト方針)
 - [`SECURITY.md`](SECURITY.md) — 現状の暗号学的成熟度 (何が本物で何がプレースホルダか), 信頼モデル, 脆弱性報告

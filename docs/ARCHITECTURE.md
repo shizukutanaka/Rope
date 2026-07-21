@@ -156,6 +156,7 @@ rope/
 ├── Cargo.toml
 ├── LICENSE             # MIT
 ├── README.md
+├── CLAUDE.md           # AI エージェント (Opus/Sonnet) 向け作業指示書
 ├── CHANGELOG.md        # 変更履歴 (SemVer)
 ├── CONTRIBUTING.md    # 貢献ガイド (設計原則, 品質ゲート, テスト方針)
 ├── SECURITY.md         # 暗号学的成熟度の開示 (本物/プレースホルダの分離), 信頼モデル
