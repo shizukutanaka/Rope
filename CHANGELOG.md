@@ -24,6 +24,18 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
   の Definition of Done に「返金は実 mint swap による proof 再発行に置換」を追加。
   信用側 (`mint_tokens`/`receive_proofs`/`lock_funds`) は不変条件を維持しており
   問題ないことも確認済み
+- **`spend_proofs` がバケットを検証前に変異させ、部分的に不正な id 列で有効 proof を
+  破壊する潜在バグを発見・記録** (§1.8 と同じ精読パス)。`spend_proofs`
+  (`ecash.rs:523-542`) は `bucket.retain(...)` で該当 proof を**先に削除**してから
+  「全部見つかったか」を検証し、不一致なら `total_sats` 減算前に bail する。
+  結果、存在しない/重複 id を含む呼び出しでマッチ済み proof が失われ
+  `total_sats > Σproofs` に desync する (§1.8 は fail-closed だがこちらは
+  fail-*un*-closed で資金消滅)。`before_len` は捕捉のみで rollback に未使用。
+  現状 `spend_proofs` は CLI 未到達 (§2.3) のため実害ゼロ。
+  `docs/SURPLUS_AND_GAPS.md` §1.9 に file:line と v0.3 修正方針
+  (「削除前に全 id 存在を検証し all-or-nothing 化」) を記録。
+  **ビルド不能環境でのマネーパス修正は CLAUDE.md §4 の運用規範に従い見送り**、
+  コンパイラ検証可能な v0.3 での修正に委ねる
 
 ### Added
 

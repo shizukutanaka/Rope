@@ -155,6 +155,39 @@ against HEAD before trusting anything past `830d8c4`.
   `簡略化` comment exists. Cross-referenced from
   `docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md` Definition of Done.
 
+### 1.9 `spend_proofs` mutates the wallet bucket before validating the full id set — a partially-invalid id list destroys the valid proofs `[OPEN, latent; harmless while §2.3 keeps ecash CLI-unreachable, fix before wiring in v0.3]`
+- Found by careful reading of the ecash money paths (2026-07, this session),
+  same pass that produced §1.8.
+- `spend_proofs` (`ecash.rs:523-542`) removes the requested proofs from the
+  mint bucket **first**, then checks that the full set was found:
+  ```rust
+  bucket.retain(|p| {
+      if proof_ids.contains(&p.id) { spent.push(p.clone()); false } // removed
+      else { true }
+  });
+  if spent.len() != proof_ids.len() { anyhow::bail!("一部 proof 見つからず"); }
+  ```
+  The `retain` has already mutated `self.wallet.proofs_by_mint[mint_id]` by
+  the time the length check runs, and the bail happens **before**
+  `total_sats` is decremented (line 545). So if `proof_ids` contains any id
+  that isn't in the bucket, or a duplicate id, the matched proofs are already
+  gone from the bucket, `spent` is dropped on the error return, and
+  `total_sats` is unchanged → `total_sats > Σproofs` and the valid proofs are
+  permanently lost.
+- `before_len` (line 531) is captured but only fed to `let _ = before_len;`
+  (line 561) — it is dead and does **not** drive any rollback.
+- Concrete trigger once ecash is wired (§2.3): a caller passing
+  `["valid_id", "typo_id"]` or `["id", "id"]` loses `valid_id`/`id` entirely
+  while getting an error. Fails *un-*closed on the accounting side (money
+  destroyed + scalar desynced), unlike §1.8 which fails closed.
+- Correct v0.3 fix: validate the full id set exists **before** removing
+  anything (e.g. count matches in `bucket.iter().filter(...)` first, bail on
+  mismatch, then remove), so the mutation is all-or-nothing. Must be applied
+  and compiler-verified before `spend_proofs` becomes reachable.
+- Why it's harmless *today*: `spend_proofs` is part of the same
+  CLI-unreachable `EcashManager` mutation API as §1.8 (§2.3) — no verb calls
+  it against a real wallet.
+
 ---
 
 ## 2. SURPLUS (過剰) — code/commitments beyond what's currently backed by use or roadmap
