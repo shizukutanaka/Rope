@@ -32,7 +32,11 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
   改善案 (優先順+ブロッカー種別) を圧縮し、作業規範 (未検証の明記、単独レビューを
   過信しない=active_sessions 回帰の実例、file:line 発見記録、後方互換、正直さの文化) と
   14 ドキュメントの索引を収録。既存の分散した長所短所改善情報 (ASSESSMENT.md /
-  SURPLUS_AND_GAPS.md / readiness 群) への単一の入口として機能する。純ドキュメント追加
+  SURPLUS_AND_GAPS.md / readiness 群) への単一の入口として機能する。純ドキュメント追加。
+  追補: §4 に「モデル別の運用ヒント」小節を追加 — Sonnet は手順書準拠の
+  スコープ明確な実装向き (マネーパス変更・広範削除は回避、consent/decision
+  項目は着手しない)、Opus は判断を伴う監査・設計再評価向き (重要変更は
+  Workflow 敵対的レビューと併用)、未検証明記と正直さは両者共通の絶対条件
 - **`CONTRIBUTING.md`** — 公開OSSとして GitHub の Community Standards が
   期待する貢献ガイドを新設。設計原則 (Focus/Subtraction/正直なフォールバック)、
   マージ前に通すべき品質ゲート全コマンド、`unsafe` 禁止・MSRV 1.75・
