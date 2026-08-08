@@ -39,6 +39,27 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Added
 
+- **`docs/RESEARCH_UPDATE_2026-08.md`** — 最新論文・技術情報の調査 (2026-08-08)。
+  **調査設計を変更**: 従来は既存バックログのカテゴリ順に調べていたが、今回は
+  `FIRST_PRINCIPLES_AUDIT.md` が演繹した公理の依存順 (A1 発見 → A3 実行 → A4 検証)
+  に沿って「最優先と判定した箇所の実装可否を一次情報で確定させる」ことを目的とした。
+  主要な発見:
+  (1) **🔴 Hollow-LLM 攻撃** (arXiv:2607.28884, IEEE S&P'26 採択、前回調査以降の新着) —
+  宣言アーキテクチャを保ったまま「ゴースト重み」で実効計算を潰し、ZK 証明を通過しつつ
+  小モデル相当のコストしか払わない攻撃。根本原因は証明が *effort gap*
+  (どれだけ計算したか) を検証しない点。**Rope の `proof_satisfies` はこれより更に弱く**、
+  第一原理監査の A4 判定を査読付き論文が独立に裏付けた形。
+  `RESEARCH_IMPROVEMENTS.md` #1 の受け入れ基準に「投入計算量の検証」を追加し、
+  TensorCommitments の採否を effort gap 耐性の確認まで保留に変更。
+  (2) **A3 の推論 crate を mistral.rs に確定** — pure Rust (Candle 0.9.2)、CPU 単独動作可で、
+  第一原理監査 §8 が演繹した最小要件 (CPU・非TEE で十分) と噛み合う。`llama-cpp-2` は
+  C++ FFI + 作者が semver 非準拠を明言しており依存最小主義・MSRV 固定方針と衝突。
+  (3) **Iroh v1.0.0 が 2026-06 に正式リリース済**と確定 (NAT 越え成功率が libp2p ~70% を
+  上回る、`libp2p-iroh` による段階移行も可能) → `P2P_IMPLEMENTATION_READINESS.md` に反映。
+  (4) NVIDIA CC は本番運用フェーズ (Blackwell 組込、Apple PCC 採用)。NRAS の
+  「attestation は起動時のみ」設計が Rope の鮮度チェック設計と整合することを確認。
+  **調査の限界も明記**: arxiv.org が egress proxy でブロックされるため論文は要旨のみ、
+  crates.io 個別ページも取得不可 — 未確定事項を確定として扱わない
 - **`docs/FIRST_PRINCIPLES_AUDIT.md`** — First Principles Thinking による機能の
   過不足監査を新設。既存の `SURPLUS_AND_GAPS.md` が実装から出発する**帰納**
   (「このコードは到達するか」) なのに対し、本書は製品定義

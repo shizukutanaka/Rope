@@ -145,6 +145,7 @@ exit(1):     ロック競合・孤児セッション掃除失敗では出さな�
 - [`docs/REACHABILITY_AUDIT.md`](docs/REACHABILITY_AUDIT.md) — `#![allow(dead_code)]` 配下 161 関数の到達可能性監査 (次回削除候補 29件)
 - [`docs/SURPLUS_AND_GAPS.md`](docs/SURPLUS_AND_GAPS.md) — 過剰(過去に削除/保持判断したもの)と不足(未実装・要判断)を機械可読形式で一覧化。後続の AI エージェント向け
 - [`docs/FIRST_PRINCIPLES_AUDIT.md`](docs/FIRST_PRINCIPLES_AUDIT.md) — 製品定義の公理から機能の要否を演繹した監査 (上記の帰納的一覧と対をなす)
+- [`docs/RESEARCH_UPDATE_2026-08.md`](docs/RESEARCH_UPDATE_2026-08.md) — 最新論文・技術動向 (Hollow-LLM 攻撃、推論 crate 選定、Iroh 1.0、NVIDIA CC 本番化)
 - [`docs/P2P_IMPLEMENTATION_READINESS.md`](docs/P2P_IMPLEMENTATION_READINESS.md) — 最大のギャップ (実P2P I/O) を、ネットワーク復旧後すぐ着手できる runbook として事前設計
 - [`docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md`](docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md) — Cashu 盲目署名 (BDHKE) の実装 runbook。NUT-00 公式仕様の数式を検証済み
 - [`examples/quickstart.sh`](examples/quickstart.sh) — 4 動詞クイックスタート

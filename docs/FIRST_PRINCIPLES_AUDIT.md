@@ -211,7 +211,7 @@ A3 の最小定義: **借り手のプロンプトが実際にモデルで処理�
 
 | 要素 | 現状 | 備考 |
 |---|---|---|
-| 推論エンジンへのバインディング | **不在** | `llama-cpp-rs` (FFI, 実績) vs `mistral.rs` (pure Rust) の比較は `RESEARCH_UPDATE_2026-07.md` §6 |
+| 推論エンジンへのバインディング | **不在** | **`mistral.rs` を推奨** — 2026-08 調査で Rope の設計制約と突き合わせ確定 (pure Rust / Candle 0.9.2 / CPU 単独で動作 = §8 の「初回は CPU で十分」が実際に成立)。`llama-cpp-2` は C++ FFI + API 不安定 (作者が semver 非準拠を明言) で依存最小主義と衝突。根拠: [`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §2 |
 | モデル重みの取得手段 | 不在 | **ローカルパス指定で最小充足**。CID/P2P 配布 (`RESEARCH_IMPROVEMENTS.md` #11) は A3 の必要条件ではなく最適化 — A3 成立後の課題 |
 | `ExecutionPlan` → 実行の配線点 | 不在 | `resolve` (`intent.rs:603`) が `ExecutionPlan` (`intent.rs:396-408`) を返して終わっている。`steps`/`selected_model_variant` は揃っているが、**それを受け取って実行する主体がいない** |
 

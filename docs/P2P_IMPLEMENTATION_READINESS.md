@@ -17,6 +17,14 @@
 
 ## 0. まず決めること: libp2p か Iroh か
 
+> **2026-08-08 更新** ([`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §3):
+> **Iroh v1.0.0 が 2026-06 に正式リリース済**であることを確認 (本文書作成時は
+> リリース状況が未確定だった)。NAT ホールパンチング成功率は Tailscale 由来の
+> 手法により **libp2p の ~70% を上回る**とされ、リレー fallback も内蔵。
+> さらに **`libp2p-iroh`** (iroh QUIC を libp2p transport として使う crate) が
+> 存在するため、**libp2p のプロトコル資産を保ちつつ transport だけ Iroh に
+> する段階移行**という第三の選択肢がある。下の比較表と併せて判断すること。
+
 `docs/IMPROVEMENT_SYNTHESIS.md` Part 1 は libp2p 前提で実装コードまで
 用意済み。`docs/RESEARCH_UPDATE_2026-07.md` §4 は 2026年6月にリリースされた
 Iroh 1.0 を対抗馬として発見した。**この選択が全ての後続作業を左右するため、

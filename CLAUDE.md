@@ -79,9 +79,9 @@ W7/W8 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashMa
 | 優先 | 改善案 | ブロッカー | 着手の手引き |
 |------|--------|-----------|-------------|
 | 最高 | 実 P2P 結線 (mDNS→Noise→NAT 越え) | `build` (新規 crate 要) | [`docs/P2P_IMPLEMENTATION_READINESS.md`](docs/P2P_IMPLEMENTATION_READINESS.md) — libp2p vs Iroh 比較・段階手順あり |
-| 最高 | **推論エンジン統合 (実際に計算を実行する能力)** | `build` (llama-cpp-rs or mistral.rs) | **第一原理監査で「型すら存在しない唯一の公理 (A3)」と判明** — 他は型だけでも在る。**最小充足条件は `FIRST_PRINCIPLES_AUDIT.md` §8 に演繹済み** (CPU・非決定論的・非TEE・ローカルモデルパスで A3 は満たせる / 置き場所は `net/inference.rs` + feature 分離が既存アーキと整合)。crate 比較は `RESEARCH_UPDATE_2026-07.md` §6 |
+| 最高 | **推論エンジン統合 (実際に計算を実行する能力)** | `build` (**mistral.rs 推奨**) | **第一原理監査で「型すら存在しない唯一の公理 (A3)」と判明** — 他は型だけでも在る。**最小充足条件は `FIRST_PRINCIPLES_AUDIT.md` §8 に演繹済み** (CPU・非決定論的・非TEE・ローカルモデルパスで A3 は満たせる / 置き場所は `net/inference.rs` + feature 分離が既存アーキと整合)。crate 比較は `RESEARCH_UPDATE_2026-07.md` §6 |
 | 高 | 実 BDHKE (Cashu 盲目署名) | `build` (k256 要) | [`docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md`](docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md) — NUT-00 数式検証済・DoD あり。第一原理では A5 は A1/A3 に依存する後段 (`FIRST_PRINCIPLES_AUDIT.md` §4) |
-| 高 | 検証エンジン (proof-of-execution) | **A3 (推論実行) が前提** | `SURPLUS_AND_GAPS.md` §1.3, `RESEARCH_UPDATE_2026-07.md` §1。第一原理では A3 の後段 (実行がないものは検証しようがない) |
+| 高 | 検証エンジン (proof-of-execution) | **A3 (推論実行) が前提** | `SURPLUS_AND_GAPS.md` §1.3。第一原理では A3 の後段。**⚠️ 手法選定の前に [`RESEARCH_UPDATE_2026-08.md`](docs/RESEARCH_UPDATE_2026-08.md) §1 を読むこと** — Hollow-LLM 攻撃 (IEEE S&P'26) が「出力の正しさだけを見る検証」を破るため、**投入計算量の検証**を受け入れ基準に含める必要がある |
 | 高 | CI 有効化 (`.github/workflows/` へ移動) | **`consent`** (secrets アクセス) | ユーザーの明示同意なしに移動しない。`.disabled` 内容は改善済 |
 | 中 | `session.rs` 10 関数クラスターの削除/配線 | **`decision`** (製品判断) | `SURPLUS_AND_GAPS.md` §2.4 — 「呼出ゼロ」だけで削除しない (緊急停止コード) |
 | 中低 | 永続化 WAL 化、sats→USD の実価格フィード | 実 ecash 結線と連動 | §1.6, §2.5 |
@@ -139,6 +139,6 @@ W7/W8 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashMa
 | どのコードが CLI から到達するか | [`docs/REACHABILITY_AUDIT.md`](docs/REACHABILITY_AUDIT.md) |
 | 何が本物の暗号で何がプレースホルダか | [`SECURITY.md`](SECURITY.md) |
 | モジュール構造・状態機械マップ | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| 優先度付き改善バックログ (2026-06) + 最新差分 (2026-07) | [`docs/RESEARCH_IMPROVEMENTS.md`](docs/RESEARCH_IMPROVEMENTS.md), [`docs/RESEARCH_UPDATE_2026-07.md`](docs/RESEARCH_UPDATE_2026-07.md) |
+| 優先度付き改善バックログ (2026-06) + 差分 (2026-07, **2026-08**) | [`docs/RESEARCH_IMPROVEMENTS.md`](docs/RESEARCH_IMPROVEMENTS.md), [`docs/RESEARCH_UPDATE_2026-07.md`](docs/RESEARCH_UPDATE_2026-07.md), [`docs/RESEARCH_UPDATE_2026-08.md`](docs/RESEARCH_UPDATE_2026-08.md) |
 | 貢献規約・品質ゲート | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | 変更履歴 | [`CHANGELOG.md`](CHANGELOG.md) |
