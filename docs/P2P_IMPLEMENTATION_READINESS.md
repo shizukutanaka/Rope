@@ -34,7 +34,7 @@ Iroh 1.0 を対抗馬として発見した。**この選択が全ての後続作
 |---|---|---|
 | 依存数 | 約50 (tcp/quic/noise/identify/autonat/dcutr/relay/yamux/kademlia) | 1クレート (`iroh`) — QUIC/NAT越え/暗号化が内蔵 |
 | Noise 実装 | 自前で `snow` crate を組合せ (`docs/RESEARCH_IMPROVEMENTS.md` #5) | Iroh 内蔵 (要: `pair.rs` の独自 Noise 状態機械と Iroh 内蔵実装の関係を精査) |
-| mDNS/Bluetooth 発見との統合 | libp2p は mDNS discovery を公式サポート、Bluetooth は別途 (`btleplug`) | **未調査** — Iroh のデフォルト発見機構が `pair.rs` の既存前提 (mDNS/BT/DHT/QR の4経路) とどう噛み合うか要検証 |
+| mDNS/Bluetooth 発見との統合 | libp2p は mDNS discovery を公式サポート、Bluetooth は別途 (`btleplug`) | **調査済 (2026-08-08)** — mDNS 発見は **`MdnsDiscovery` (旧 `LocalSwarmDiscovery`) としてデフォルト有効**、`swarm-discovery` crate 基盤で **インターネット/リレー/DNS 不要**。DHT 相当は pkarr で mainline DHT に署名済 DNS パケットを publish。**Bluetooth は非対応**。詳細と 4 経路の対応表: [`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §4d |
 | symmetric NAT 耐性の実績 | Ethereum2.0 Lighthouse実績: 85-95% (EI NAT) / 5-30% (symmetric) | Iroh側の発信情報のみ (「libp2pの上限70%を上回る」) — **中立的ベンチマーク未確認、要検証** |
 | Rope の設計原則との整合 | 実績・エコシステムの厚みで有利 | 「最小依存主義」(README 設計原則#3) との整合で有利 |
 | Rust edition/MSRV 制約 | `Cargo.toml` の `rust-version = "1.75"` と `edition2024` 回避方針との互換性要確認 | 同上、Iroh側も要確認 |

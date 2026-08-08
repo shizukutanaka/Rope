@@ -76,6 +76,16 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
   併せて SAKSHI (arXiv:2307.16562) の**マイクロペイメント連鎖ハッシュ** (直前の支払いの
   ハッシュを含めることで中断時に「どこまで払ったか」を双方が独立に証明できる) を
   A7 実装時の設計入力として記録。
+  (7) **A1 続報: P2P readiness が「未調査」と明記していた項目を確定** —
+  Iroh の発見機構と Rope の `DiscoveryMethod` 4 経路の対応を調べ、
+  **mDNS は `MdnsDiscovery` (旧 `LocalSwarmDiscovery`) としてデフォルト有効・
+  インターネット/リレー/DNS 不要**、DHT 相当は pkarr (署名済 DNS パケットを
+  mainline DHT へ publish)、Direct は NodeId dial で充足、**Bluetooth のみ非対応**と判明。
+  演繹される含意: (a) **mDNS を自前実装する必要がない**ため A1 の実装コストは想定より小さい、
+  (b) §4c の DLEQ と同型で、**Iroh の mDNS 発見がリレー不要である事実は Rope の現状
+  (NAT 越えなし=実質 LAN) と噛み合う** — **NAT 越えを解決しなくても「LAN 内で実際に
+  ピアを見つける」ところまでは到達できる**ため実装順序に直接効く、
+  (c) `DiscoveryMethod::Bluetooth` は Iroh 採用時に唯一対応物が無く製品判断が要る。
   **調査の限界も明記**: arxiv.org が egress proxy でブロックされるため論文は要旨のみ、
   crates.io 個別ページも取得不可 — 未確定事項を確定として扱わない
 - **`docs/FIRST_PRINCIPLES_AUDIT.md`** — First Principles Thinking による機能の

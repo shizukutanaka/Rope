@@ -313,6 +313,63 @@ Rope の escrow は既に `completion_condition`/`completion_proof` を持つた
 
 ---
 
+## 4d. A1 (発見) 続報 — Iroh の発見機構と Rope の 4 経路の対応が確定
+
+§3 で Iroh 1.0 のリリースを確認したが、`P2P_IMPLEMENTATION_READINESS.md` は
+「Iroh のデフォルト発見機構が `pair.rs` の既存前提 (mDNS/BT/DHT/QR の 4 経路) と
+どう噛み合うか」を **「未調査」と明記**したままだった。今回これを埋める。
+
+### Iroh が提供する発見機構
+
+- **`MdnsDiscovery`** (旧称 `LocalSwarmDiscovery`) — **iroh 0.20.0 以降
+  デフォルトで有効**。`swarm-discovery` crate (mDNS の opinionated 実装) を基盤とし、
+  **インターネット・リレーサーバ・DNS インフラのいずれも不要**でローカル
+  ネットワーク上のエンドポイントを相互発見する。不要なら `Builder::node_discovery`
+  に `DiscoveryConfig::Custom` を渡して無効化できる。
+- **pkarr / DNS discovery** — 各ノードが自身のアドレス情報を**秘密鍵で署名した
+  DNS パケットとして mainline DHT に publish** する。pkarr はドメイン名ではなく
+  **楕円曲線鍵**を解決する DNS レコードを扱う。直接アドレスと (任意で) リレー URL を含む。
+- **NodeId による dial** — アドレスなしで NodeId だけを指定して接続できる
+  (発見機構が裏でアドレスを解決する)。
+
+### Rope の `DiscoveryMethod` 4 経路 (`pair.rs:79-87`) との対応
+
+| Rope の経路 | Iroh での扱い | 判定 |
+|---|---|---|
+| `Mdns` (同一LAN, `_rope._tcp.local`) | **`MdnsDiscovery` がデフォルトで担う** | ✅ **自前実装不要**。サービス名の指定方法だけ確認すればよい |
+| `Dht` (Kademlia, 広域) | **pkarr が mainline DHT へ署名済 DNS パケットを publish** | ✅ 相当機能あり。ただし Kademlia を直接叩く設計ではないため `pair.rs` の DHT 前提は読み替えが必要 |
+| `Direct` (URL 手動指定) | **NodeId dial / 直接アドレス指定**で充足 | ✅ 充足 |
+| `Bluetooth` (BLE 近接) | **Iroh は非対応** | ❌ **別 crate (`btleplug` 等) が必要**、または経路自体を落とす製品判断 |
+
+### 演繹される 3 つの結論
+
+1. **A1 の実装コストは想定より小さい** — mDNS は Rope が自前で書く必要がなく、
+   Iroh を採用した時点でデフォルトで手に入る。`pair.rs` の `record_discovery`
+   (`pair.rs:615`) に Iroh の発見イベントを流し込む配線が主作業になる。
+2. **§4c (DLEQ) と同じ構造の発見**: Iroh の mDNS 発見が
+   **インターネット・リレー不要**であることは、Rope の現状 (NAT 越えなし =
+   実質 LAN) と**完全に噛み合う**。つまり **A1 の第一歩は「LAN 内で実際に
+   ピアを見つける」ところまでなら、NAT 越えを解決しなくても到達できる**。
+   NAT 越えは A1 の *全体* には必要だが、*最初の動く一歩* には不要。
+   これは実装順序に直接効く知見。
+3. **`DiscoveryMethod::Bluetooth` は製品判断が必要** — Iroh 採用時に唯一
+   対応物が無い経路。第一原理で見ると BLE 近接発見は A1 を満たす**一手段**に
+   過ぎず、mDNS と pkarr で A1 は充足する。`DiscoveryMethod::Contact` を
+   v0.2.13 で削除したのと同じ判断 (使われない variant は落とす) が
+   適用できる可能性がある — ただし「近接ペアリング」という UX 上の価値は
+   別途評価が要る (`decision` タグ案件)。
+
+### 参考: mDNS を自前実装する場合の選択肢
+
+Iroh を採用せず libp2p 継続または独自実装を選ぶ場合、pure Rust の
+**`mdns-sd`** (`keepsimple1/mdns-sd`) が候補。async ランタイム非依存
+(専用スレッド + flume チャネル)、依存が小さい、safe Rust。
+Avahi (Linux) / dns-sd (macOS) / Bonjour (iOS) との相互運用をテスト済み。
+ただし作者自身が **beta 段階**と位置づけている点に注意。
+**Iroh を採用するなら不要** (MdnsDiscovery が担うため)。
+
+---
+
 ## 5. 今回の調査が既存文書に要求する更新
 
 | 更新先 | 内容 | 根拠 |
@@ -323,6 +380,7 @@ Rope の escrow は既に `completion_condition`/`completion_proof` を持つた
 | `FIRST_PRINCIPLES_AUDIT.md` §8 | A3 の推奨 crate を **mistral.rs に確定** (pure Rust / CPU 可 / Candle 0.9.2) | §2 |
 | `FIRST_PRINCIPLES_AUDIT.md` §4 | **依存グラフに 2 辺を追加**: `A5 → A2` (決済履歴が信頼根拠に転用できる) と `A4 → A2` (評判の入力が検証結果なら、検証が弱いと評判ごと汚染される) | §4b |
 | `RESEARCH_IMPROVEMENTS.md` #10 (Sybil) | TraceRank (2510.27554) / DARTIC (2605.18146) を追加。特に **ecash の無記名性と評判の両立**は A2 着手前に設計判断が要る | §4b |
+| `P2P_IMPLEMENTATION_READINESS.md` 比較表 | **「未調査」だった Iroh 発見機構と Rope 4 経路の対応を確定** (mDNS=デフォルト有効で自前実装不要 / DHT=pkarr / Direct=NodeId dial / **Bluetooth=非対応**) | §4d |
 | `CASHU_BDHKE_IMPLEMENTATION_READINESS.md` Step 5 | **DLEQ (NUT-12) を「任意・優先度低」から格上げ** — streaming 課金の mint 往復回避と、A1 未達 (実質 LAN) 環境での検証可能性に必須。一次仕様の検証アルゴリズムを確認済み | §4c |
 | `RESEARCH_IMPROVEMENTS.md` (A7 関連) | SAKSHI (2307.16562) の**マイクロペイメント連鎖ハッシュ**を A7 実装時の設計入力として追加 | §4c |
 | `CLAUDE.md` 改善案表 | 推論エンジン行に mistral.rs を明記 | §2 |
@@ -353,6 +411,8 @@ Rope の escrow は既に `completion_condition`/`completion_proof` を持つた
 - arXiv:2605.18146 — DARTIC (分散匿名評判、dual-ledger)
 - arXiv:2606.24942 / 2603.19452 / 2605.00073 — PoUW・TrustFlow・AgentReputation (記録のみ)
 - arXiv:2307.16562 — SAKSHI (データ/制御/決済の経路分離、proof of inference)
+- iroh `MdnsDiscovery` / `swarm-discovery` / pkarr — 発見機構 (DeepWiki, iroh 0.20 リリースノート)
+- `keepsimple1/mdns-sd` — pure Rust mDNS (Iroh 非採用時の代替候補、作者は beta と位置づけ)
 - `cashubtc/nuts` `12.md` — NUT-12 DLEQ **一次仕様を GitHub raw 経由で取得・検証**
   (本調査で唯一、要旨ではなく仕様本文を確認できた資料)
 - `EricLBuehler/mistral.rs` — pure Rust 推論エンジン (Candle ベース)
