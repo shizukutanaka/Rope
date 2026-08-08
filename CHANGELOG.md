@@ -58,6 +58,13 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
   上回る、`libp2p-iroh` による段階移行も可能) → `P2P_IMPLEMENTATION_READINESS.md` に反映。
   (4) NVIDIA CC は本番運用フェーズ (Blackwell 組込、Apple PCC 採用)。NRAS の
   「attestation は起動時のみ」設計が Rope の鮮度チェック設計と整合することを確認。
+  (5) **A2 (信頼確立) に 2 件の新着** — TraceRank (arXiv:2510.27554) は支払いを推薦として
+  扱い支払者の評判で重み付ける手法で、**Rope は既に ecash を持つため決済履歴を信頼根拠に
+  転用できる**ことが判明 (ただし Cashu の無記名性と衝突するため設計要検討)。
+  DARTIC (arXiv:2605.18146) は dual-ledger で匿名性・評判・スケールを三立し、
+  **評判を検証可能な実行結果で駆動する** — つまり検証が effort gap を見逃せば評判ごと
+  汚染される。この 2 件から **第一原理監査の依存グラフに `A5 → A2` (逆方向) と
+  `A4 → A2` の 2 辺を追加**。
   **調査の限界も明記**: arxiv.org が egress proxy でブロックされるため論文は要旨のみ、
   crates.io 個別ページも取得不可 — 未確定事項を確定として扱わない
 - **`docs/FIRST_PRINCIPLES_AUDIT.md`** — First Principles Thinking による機能の

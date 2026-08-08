@@ -161,6 +161,80 @@ MSRV が 1.75 を満たすか、依存が edition2024 を要求しないかは
 
 ---
 
+## 4b. A2 (信頼確立) — 未知の他人をどう信頼するか、2 件の新着
+
+第一原理監査 §2 で A2 は「TOFU のみ = 初回ピア選択に信頼の根拠なし」と判定した。
+既存の `RESEARCH_IMPROVEMENTS.md` #10 は Bittensor / FORTYTWO を扱っているが、
+以下 2 件は未収載であり、**いずれも Rope の既存資産と噛み合う**。
+
+### (a) TraceRank — 支払いそのものを推薦として使う (arXiv:2510.27554)
+
+"Sybil-Resistant Service Discovery for Agent Economies" (Operator Labs)。
+
+- **中核アイデア**: 各支払いを「推薦 (endorsement)」とみなし、**支払者の評判で
+  重み付け**して伝播させる。取引額と時間的近さでも重み付ける。
+- **なぜ Sybil に強いか**: 支払い数を数えるだけなら Sybil スパムを招き、
+  取引量で順位付けすると wash trading を招く — どちらも「誰が払ったか」を
+  無視して量に偏る。TraceRank では、新規ウォレット (seed ≒ 0) が何回払っても
+  寄与は無視できる一方、実績ある支払者の 1 回が大きく効く。
+  結果として「多数の低評判支払者を持つスパム」は「少数の高評判支払者を持つ
+  正規サービス」より下位になる。
+
+**Rope への含意 (ここが重要)**: Rope は **既に ecash 決済を持つ** (A5)。
+つまり TraceRank が必要とする「支払いフロー」は、A5 が結線された時点で
+**副産物として自動的に手に入る**。A2 のために別途評判インフラを構築する必要はなく、
+**A5 の決済履歴を A2 の信頼根拠に転用できる**。これは第一原理の依存グラフ
+(§4) に対する新しい知見 — A5 は A2 の後段と位置づけていたが、
+**A5 が動くと A2 の解法が一つ増える**という逆方向の依存が存在する。
+
+ただし注意: Rope の ecash は **bearer token (無記名)** であり、Cashu の
+プライバシー特性上、支払者の同一性を追跡しない設計。TraceRank をそのまま
+適用すると **A6 (秘匿) / ecash の匿名性と衝突する**。採用するなら
+「評判を担う識別子」と「支払いの無記名性」をどう両立するかの設計が必要 —
+これは次の (b) が扱う問題そのもの。
+
+### (b) DARTIC — 匿名性・評判・スケールの三立 (arXiv:2605.18146)
+
+"Decentralized Anonymous Reputation at Scale for Trustworthy Crowdsourcing"。
+
+- **問題設定**: 既存の分散評判は「匿名性・評判の紐付け・スケール」を
+  同時に満たせていない、という指摘。上記 (a) の衝突とまさに同じ問題。
+- **手法**: **dual-ledger** により、依頼者/作業者が相互作用ごとに異なる
+  擬似名を使いつつ、**単一のアクセストークンに暗号学的に束縛**する。
+  → 相互作用間の unlinkability (追跡不可能性) を保ちながら、
+  **whitewashing (悪評を捨てて再参加する攻撃) を防ぐ**。
+- **評判モデル**: **明示的なフィードバックではなく、検証可能な実行結果から
+  評判を駆動する**。報復や操作のリスクを下げる。
+- **スケール**: proof aggregation と Layer-2 実行、バッチ化で
+  オンチェーン検証コストを削減。
+
+**Rope への含意**: 2 点ある。
+
+1. **A2 と A6 の衝突を解く既存研究が存在する** — 「匿名だが評判は持てる」は
+   設計として実現可能であり、Rope が A2 を実装する際に
+   「TOFU か、匿名性を捨てた実名評判か」の二択で考える必要はない。
+2. **「検証可能な実行結果で評判を駆動」は §1 の Hollow-LLM と直結する** —
+   評判の入力が「実行結果の検証」である以上、その検証が effort gap を
+   見逃せば評判システムごと汚染される。**A2 の評判設計は A4 の検証強度に
+   依存する**。第一原理の依存グラフに `A4 → A2` の辺を追加すべき。
+
+### 判断: どちらも「採用」ではなく「A2 実装時の設計入力」として記録
+
+- Rope は現時点で A1 (発見) すら動かないため、評判システムの実装は時期尚早。
+- ただし **A2 の設計を始める時点で、上記 2 件を読んでから始めるべき**。
+  特に「ecash の無記名性と評判の両立」は、後から接ぎ木すると
+  アーキテクチャ全体をやり直すことになる種類の設計判断。
+- **本文未読** (arxiv.org egress ブロック)。要旨レベルの記録に留める。
+
+その他、同時期に見つかった関連 (要旨のみ、Rope への直接の含意は薄いが記録):
+- **arXiv:2606.24942** — Proof-of-Useful-Work + ポスト量子安全な分散 AI 経済。
+  ハッシュパズルを「外部価値のあるタスク」に置き換えつつ検証可能性と
+  Sybil 耐性を保つ路線。Rope の「トークン不要」思想とは前提が異なる。
+- **arXiv:2603.19452** TrustFlow — トピック認識のベクトル評判伝播。
+- **arXiv:2605.00073** AgentReputation — エージェント向け分散評判フレームワーク。
+
+---
+
 ## 5. 今回の調査が既存文書に要求する更新
 
 | 更新先 | 内容 | 根拠 |
@@ -169,6 +243,8 @@ MSRV が 1.75 を満たすか、依存が edition2024 を要求しないかは
 | `RESEARCH_IMPROVEMENTS.md` #1 | TensorCommitments の採否を**保留扱いに変更** (effort gap 耐性が未確認) | §1 |
 | `P2P_IMPLEMENTATION_READINESS.md` | Iroh **1.0 正式リリース済 (2026-06)** / `libp2p-iroh` による段階移行 | §3 |
 | `FIRST_PRINCIPLES_AUDIT.md` §8 | A3 の推奨 crate を **mistral.rs に確定** (pure Rust / CPU 可 / Candle 0.9.2) | §2 |
+| `FIRST_PRINCIPLES_AUDIT.md` §4 | **依存グラフに 2 辺を追加**: `A5 → A2` (決済履歴が信頼根拠に転用できる) と `A4 → A2` (評判の入力が検証結果なら、検証が弱いと評判ごと汚染される) | §4b |
+| `RESEARCH_IMPROVEMENTS.md` #10 (Sybil) | TraceRank (2510.27554) / DARTIC (2605.18146) を追加。特に **ecash の無記名性と評判の両立**は A2 着手前に設計判断が要る | §4b |
 | `CLAUDE.md` 改善案表 | 推論エンジン行に mistral.rs を明記 | §2 |
 
 ---
@@ -193,6 +269,9 @@ MSRV が 1.75 を満たすか、依存が edition2024 を要求しないかは
 - arXiv:2606.16352 — Communication-Efficient Verifiable Attention (VeriAttn)
 - arXiv:2603.18046 — NanoZK
 - arXiv:2602.12630 — TensorCommitments (前回調査で既出、今回再評価対象)
+- arXiv:2510.27554 — Sybil-Resistant Service Discovery / TraceRank (Operator Labs)
+- arXiv:2605.18146 — DARTIC (分散匿名評判、dual-ledger)
+- arXiv:2606.24942 / 2603.19452 / 2605.00073 — PoUW・TrustFlow・AgentReputation (記録のみ)
 - `EricLBuehler/mistral.rs` — pure Rust 推論エンジン (Candle ベース)
 - `utilityai/llama-cpp-rs` (`llama-cpp-2`) — llama.cpp FFI バインディング
 - iroh.computer / StackRadar — Iroh 1.0 (2026-06 リリース)
