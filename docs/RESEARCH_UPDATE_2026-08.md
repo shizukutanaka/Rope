@@ -235,6 +235,84 @@ MSRV が 1.75 を満たすか、依存が edition2024 を要求しないかは
 
 ---
 
+## 4c. A5/A7 (対価移転・中断耐性) — DLEQ の優先度判定が第一原理では誤り
+
+A5/A7 は第一原理監査 §2 で「実装済みだが未到達」(△) と判定され、
+§4 の依存グラフでは「最も完成に近い、結線待ち」と位置づけた。
+今回この前提を一次仕様で検証したところ、**既存文書の優先度判定に
+明確な誤りが 1 件見つかった**。
+
+### 発見: NUT-12 (DLEQ) は「任意・優先度低」ではなく A5/A7 の中核
+
+`CASHU_BDHKE_IMPLEMENTATION_READINESS.md` は DLEQ を
+**「Step 5 (任意、優先度低)」**に置いている。しかし NUT-12 の一次仕様
+(`cashubtc/nuts` の `12.md` を GitHub raw 経由で取得・確認) を読むと、
+これは Rope の構造上、**任意機能ではなく必須基盤**である。
+
+**NUT-12 が保証すること**:
+- DLEQ proof は `e` (challenge hash) と `s` (response) を含み、
+  ユーザー間で渡す際は `r` (blinding factor) も添える。
+- **受信者 (Carol) は mint に一切問い合わせずに**、
+  `C' = C + r*A` / `B' = Y + r*G` で盲検値を復元し、
+  `R1 = s*G - e*A`, `R2 = s*B' - e*C'`, `e == hash(R1,R2,A,C')` を検証できる。
+- これにより「mint が `A = a*G` の生成と署名に**同じ秘密鍵を使った**」ことを
+  暗号学的に確認でき、**mint が後から「その ecash は発行していない」と
+  否認することを防ぐ**。
+
+**なぜ Rope にとって中核なのか (第一原理での再評価)**:
+
+1. **A7 (中断耐性) の前提**: Rope の streaming 課金 (`tick_stream`,
+   `ecash.rs:982`) は 1 秒単位で proof をやり取りする設計。各 tick で
+   mint に往復すると、**60 秒のジョブで最大 60 回の往復**が発生し、
+   ネットワーク断で即座に中断する。DLEQ があれば受領時点でオフライン検証でき、
+   **mint 往復なしで課金が進む** — これは既存文書
+   (`CATEGORY_RESEARCH.md` §E2) が「ストリーミング秒課金で mint 往復を省く鍵」と
+   正しく指摘していたが、**readiness 側の優先度に反映されていなかった**。
+2. **A1 未達との相互作用 (これが決定的)**: Rope は現在 NAT 越えを持たず
+   実質 LAN 止まり (W2)。**LAN 内取引では mint への到達性自体が保証されない**。
+   DLEQ なしの ecash は「mint に繋がらなければ検証できない ecash」であり、
+   Rope が最初に動く環境 (LAN・オフライン寄り) と最も相性が悪い。
+   **A1 が制約されている今こそ DLEQ の価値が高い**という逆説。
+3. **§1 (Hollow-LLM) との接続**: A4 の検証が計算量を見るべきなのと同型で、
+   A5 でも「mint の署名が本物か」を**受け手側で独立に検証できる**ことが
+   信頼の非対称性を減らす。DLEQ は A5 における effort gap 対策に相当する。
+
+**判断**: `CASHU_BDHKE_IMPLEMENTATION_READINESS.md` の Step 5 から
+**DLEQ を切り出し、優先度を引き上げるべき** (P2PK は任意のままでよい)。
+本書はその根拠となる一次仕様の確認結果を提供する。
+
+### 参考: SAKSHI の設計 (arXiv:2307.16562) — 経路分離という視点
+
+"SAKSHI: Decentralized AI Platforms" (Princeton / UIUC / 清華 / HKUST +
+Witness Chain / EigenLayer)。分散 AI サービスの trust-free 基盤。
+
+- **中核の設計原則**: **データ経路** (AI クエリと応答) / **制御経路**
+  (ルータと計算・ストレージホストの管理) / **決済経路** (課金と支払いを
+  ブロックチェーン上で管理) の **3 つを分離**する。
+- この分離を可能にするのが **"proof of inference" レイヤ**で、
+  劣悪な AI サービス・不払い・モデル複製といった多様な不正に
+  暗号学的耐性を与える。
+- 紛争解決: マイクロペイメント自体が**支払い済みの証明**として機能し、
+  「支払いを受けていない」という主張の解決に使える。支払いチャネルを
+  紛争対応にするには、対象推論を指す `requestID` と**直前のマイクロペイメントの
+  ハッシュ**を含める必要がある (nonce で検証可能)。
+
+**Rope への含意**: Rope の `StreamSession` (`ecash.rs`) は現在、
+tick ごとの `drained_sats` を**自分のローカル状態としてのみ**持ち、
+「この tick 分を確かに払った」ことを相手に示す証跡が無い。
+SAKSHI 式に **各マイクロペイメントへ直前のハッシュを連鎖させる**と、
+中断時に「どこまで払ったか」を双方が独立に証明できる — これは A7 の
+「中断しても双方が損しない」を実際に成立させる具体的な機構。
+ただし Rope はブロックチェーンを持たない (「独自トークン不要」が売り) ため、
+SAKSHI の決済経路をそのまま移植はできない。**ハッシュ連鎖の部分だけを
+借りる**のが現実的。
+
+**判断**: 採用ではなく、**A7 を実装する際の設計入力**として記録。
+Rope の escrow は既に `completion_condition`/`completion_proof` を持つため、
+連鎖ハッシュを載せる器は存在する。
+
+---
+
 ## 5. 今回の調査が既存文書に要求する更新
 
 | 更新先 | 内容 | 根拠 |
@@ -245,6 +323,8 @@ MSRV が 1.75 を満たすか、依存が edition2024 を要求しないかは
 | `FIRST_PRINCIPLES_AUDIT.md` §8 | A3 の推奨 crate を **mistral.rs に確定** (pure Rust / CPU 可 / Candle 0.9.2) | §2 |
 | `FIRST_PRINCIPLES_AUDIT.md` §4 | **依存グラフに 2 辺を追加**: `A5 → A2` (決済履歴が信頼根拠に転用できる) と `A4 → A2` (評判の入力が検証結果なら、検証が弱いと評判ごと汚染される) | §4b |
 | `RESEARCH_IMPROVEMENTS.md` #10 (Sybil) | TraceRank (2510.27554) / DARTIC (2605.18146) を追加。特に **ecash の無記名性と評判の両立**は A2 着手前に設計判断が要る | §4b |
+| `CASHU_BDHKE_IMPLEMENTATION_READINESS.md` Step 5 | **DLEQ (NUT-12) を「任意・優先度低」から格上げ** — streaming 課金の mint 往復回避と、A1 未達 (実質 LAN) 環境での検証可能性に必須。一次仕様の検証アルゴリズムを確認済み | §4c |
+| `RESEARCH_IMPROVEMENTS.md` (A7 関連) | SAKSHI (2307.16562) の**マイクロペイメント連鎖ハッシュ**を A7 実装時の設計入力として追加 | §4c |
 | `CLAUDE.md` 改善案表 | 推論エンジン行に mistral.rs を明記 | §2 |
 
 ---
@@ -272,6 +352,9 @@ MSRV が 1.75 を満たすか、依存が edition2024 を要求しないかは
 - arXiv:2510.27554 — Sybil-Resistant Service Discovery / TraceRank (Operator Labs)
 - arXiv:2605.18146 — DARTIC (分散匿名評判、dual-ledger)
 - arXiv:2606.24942 / 2603.19452 / 2605.00073 — PoUW・TrustFlow・AgentReputation (記録のみ)
+- arXiv:2307.16562 — SAKSHI (データ/制御/決済の経路分離、proof of inference)
+- `cashubtc/nuts` `12.md` — NUT-12 DLEQ **一次仕様を GitHub raw 経由で取得・検証**
+  (本調査で唯一、要旨ではなく仕様本文を確認できた資料)
 - `EricLBuehler/mistral.rs` — pure Rust 推論エンジン (Candle ベース)
 - `utilityai/llama-cpp-rs` (`llama-cpp-2`) — llama.cpp FFI バインディング
 - iroh.computer / StackRadar — Iroh 1.0 (2026-06 リリース)

@@ -125,7 +125,28 @@ API を確認すること。
   (`hash_to_curve(secret)`) を計算して送信できるようになる。
 - 実装自体は Step 1 の `hash_to_curve` を呼ぶだけ (新規の暗号ロジック不要)。
 
-### Step 5 (任意、優先度低): DLEQ (NUT-12) / P2PK (NUT-11 or NUT-28)
+### Step 5: DLEQ (NUT-12) — **優先度を引き上げ (2026-08-08)** / P2PK (任意のまま)
+
+> **⚠️ 2026-08-08 優先度訂正**
+> ([`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §4c):
+> 本 Step は当初 DLEQ と P2PK をまとめて「任意、優先度低」としていたが、
+> **NUT-12 (DLEQ) は Rope の構造上そうではない**。一次仕様
+> (`cashubtc/nuts` `12.md`) を確認した結果:
+>
+> - DLEQ proof (`e`, `s`, ユーザー間転送時は `r`) により、**受信者は mint に
+>   問い合わせず**に `R1 = s*G - e*A` / `R2 = s*B' - e*C'` /
+>   `e == hash(R1,R2,A,C')` を検証でき、mint が発行を否認できなくなる。
+> - **A7 (中断耐性) の前提**: `tick_stream` (`ecash.rs:982`) の 1 秒課金で
+>   毎 tick mint に往復すると 60 秒ジョブで最大 60 往復。DLEQ があれば
+>   受領時オフライン検証で往復を省ける (`CATEGORY_RESEARCH.md` §E2 が
+>   既に指摘していたが、本 readiness の優先度に未反映だった)。
+> - **A1 未達との相互作用**: Rope は NAT 越えを持たず実質 LAN 止まり (W2)。
+>   **LAN 内では mint への到達性自体が保証されない**ため、DLEQ なしの ecash は
+>   「mint に繋がらないと検証できない ecash」になる。A1 が制約されている
+>   現状こそ DLEQ の価値が高い。
+>
+> **P2PK (NUT-11/28) は任意のままでよい** — escrow の鍵束縛強化は
+> A5 が動いた後の話。DLEQ とは優先度が異なる。
 
 - `docs/RESEARCH_IMPROVEMENTS.md` #4 および
   `docs/RESEARCH_UPDATE_2026-07.md` §3 で指摘した通り、escrow の鍵束縛
