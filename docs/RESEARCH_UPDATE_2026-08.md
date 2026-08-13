@@ -474,6 +474,72 @@ attention を分割して再転送を減らす。Intel TDX 上で **TSDP 比 2.6
 
 ---
 
+## 4f. A8 の成立条件を実測で確定 — 「60 秒」は cold start を含められない
+
+§4e で `A6 ⊥ A8` の緩和策として「モデル常駐」を挙げたが、それが**実際に
+必要かつ可能か**は未検証だった。cold start の実測値と、
+「他人のアイドル GPU」という供給モデル自体の実証研究を調べた。
+
+### cold start の実測: 4 フェーズで 40 秒超
+
+2026 年時点のサーバレス GPU 運用資料 (Spheron / Microsoft / Cerebrium 等) が
+一致して報告する cold start の内訳:
+
+1. **コンテナイメージ pull** — 15GB 級イメージでキャッシュなしなら **4-8 分**
+2. **モデル重み転送** (ストレージ → GPU VRAM) — **70B FP16 で 40 秒超**
+3. **CUDA コンテキスト初期化 + graph capture** — **10-30 秒**
+4. KV cache warmup (任意)
+
+本番のサーバレス LLM 配備は**最初のトークンまで 40 秒超**を報告しており、
+ウォーム後の ~30ms/token と比べ **cold/warm 間に 1000 倍のレイテンシ差**がある。
+
+対策の相場も判明している: 多段キャッシュ (ローカル SSD / RAM / GPU メモリ) で
+**cold start を 6-8 倍短縮 (40 秒 → 5-10 秒)**。ただし SLO を超える場合は
+常時ウォーム維持が強制され **GPU 費用が 2-3 倍**になる — 「クリティカルな
+モデルは専用 GPU でウォーム維持、ロングテールはサーバレス」というハイブリッドが
+実務の収束点。
+
+### 演繹: 「60 秒」公理は *ウォームな貸し手* を前提にしている
+
+- Rope の A8 は「60 秒で haiku が出る」。cold start 実測 40 秒超 + 推論時間で
+  **60 秒は cold start を含めた瞬間にほぼ消える**。
+  → **A8 が成立するのは貸し手側でモデルが既にウォームな場合のみ**。
+  これは A8 の隠れた前提であり、明文化されていなかった。
+- **偶然にも Rope の既存設計はこの制約に整合している**: デモモデルは
+  llama-3.2-1b-instruct (`first_run.rs:186`) — 1B 級・量子化なら 1GB 前後で、
+  70B (転送だけで 40 秒超) とは桁が違う。小型モデルなら SSD → RAM 常駐が
+  現実的で、cold start は数秒に収まる。
+- **含意**: `RESEARCH_IMPROVEMENTS.md` #11 (モデル配布 / コールドスタート) は
+  「高優先」と位置づけられてきたが、実測値に照らすと
+  **A8 の成立条件そのもの**である。「あれば速くなる最適化」ではなく
+  「無ければ 60 秒の約束が構造的に破れる」— 位置づけを格上げすべき。
+- 同時に、**貸し手側の常駐コスト (電力・メモリ占有) は誰が払うのか**という
+  経済設計の問いが生まれる。keep-warm が 2-3 倍のコストなら、
+  アイドル GPU の貸し手に「ウォーム維持の対価」を払う仕組み (A5 の拡張) が
+  要るかもしれない — A5/A8 の設計時に検討すべき事項として記録。
+
+### 供給側の実在は査読付きで裏付けられた
+
+「他人のアイドル GPU」という供給モデル自体が成立するかについて:
+
+- **ACM AIBC 2025** "Idle Consumer GPUs as a Complement to Enterprise
+  Hardware for LLM Inference" — 消費者 GPU vs データセンター GPU の
+  レイテンシ / スループット / コスト / 炭素を**査読付きで比較した研究が存在**。
+  単発の対話プロンプトからバッチ高 QPS までのスケーリングを分析。
+- **Petals** (BitTorrent 式 LLM 推論) はピーク時 **800+ 貢献ノード**で
+  BLOOM-176B の対話的推論を実証 — **P2P モデルの実行可能性は前例がある**。
+- **BOINC** は 500 万台超のボランティア計算機で 10^20 FLOPs 超を処理した
+  カノニカルな前例。
+- 本番 LLM 推論チームの GPU 稼働率は **40-65%** が通例 (トラフィック変動と
+  バッチ上限のため) — **「アイドルな計算資源」は実在する**。
+
+→ **A1-A7 を実装しても供給が無くて詰む、という心配は現時点で不要**。
+供給モデルの実在は Rope の外部で既に実証されている。Rope 固有のリスクは
+供給ではなく、実行 (A3) と信頼 (A2/A4) の未実装に集中している —
+これは §2-§4e までの調査結果と整合する。
+
+---
+
 ## 5. 今回の調査が既存文書に要求する更新
 
 | 更新先 | 内容 | 根拠 |
@@ -488,6 +554,8 @@ attention を分割して再転送を減らす。Intel TDX 上で **TSDP 比 2.6
 | `CASHU_BDHKE_IMPLEMENTATION_READINESS.md` Step 5 | **DLEQ (NUT-12) を「任意・優先度低」から格上げ** — streaming 課金の mint 往復回避と、A1 未達 (実質 LAN) 環境での検証可能性に必須。一次仕様の検証アルゴリズムを確認済み | §4c |
 | `RESEARCH_IMPROVEMENTS.md` (A7 関連) | SAKSHI (2307.16562) の**マイクロペイメント連鎖ハッシュ**を A7 実装時の設計入力として追加 | §4c |
 | `RESEARCH_IMPROVEMENTS.md` #2/#3 (TEE) | **CC オーバーヘッドの実測値を追加** (GPU 計算 0.998x = ほぼ無損失 / サービング全体 13-27% 損失 / 原因は CVM-GPU ブリッジ)。**Rope の短ジョブ特性は最悪ケース**であり A6 と A8 が構造的に緊張する点を明記 | §4e |
+| `RESEARCH_IMPROVEMENTS.md` #11 (cold start) | **「高優先」→「A8 の成立条件」に格上げ** — cold start 実測 40 秒超に対し 60 秒の約束は cold start を含められない。小型モデル常駐が前提条件 | §4f |
+| `FIRST_PRINCIPLES_AUDIT.md` §4 | **A8 の隠れた前提「ウォームな貸し手」を明文化**。供給側の実在 (Petals 800+ ノード / BOINC / 稼働率 40-65%) は裏付け済み | §4f |
 | `CLAUDE.md` 改善案表 | 推論エンジン行に mistral.rs を明記 | §2 |
 
 ---
@@ -519,6 +587,9 @@ attention を分割して再転送を減らす。Intel TDX 上で **TSDP 比 2.6
 - arXiv:2606.23969 — The Serialized Bridge (Blackwell GPU-CC の性能分析、最も精密な実測値)
 - arXiv:2409.03992 — Confidential Computing on Hopper GPUs (H100 ベンチマーク)
 - arXiv:2507.02770 — Blueprint, Bootstrap, and Bridge (NVIDIA GPU CC のセキュリティ分析)
+- ACM AIBC 2025 (doi 10.1145/3775043.3775047) — Idle Consumer GPUs as a Complement to Enterprise Hardware (査読付き)
+- Spheron / Microsoft Community Hub / Cerebrium (2026) — GPU cold start の 4 フェーズ実測・keep-warm 経済
+- Petals (800+ ノード実証) / BOINC (500 万台前例) — P2P・ボランティア計算の実行可能性
 - iroh `MdnsDiscovery` / `swarm-discovery` / pkarr — 発見機構 (DeepWiki, iroh 0.20 リリースノート)
 - `keepsimple1/mdns-sd` — pure Rust mDNS (Iroh 非採用時の代替候補、作者は beta と位置づけ)
 - `cashubtc/nuts` `12.md` — NUT-12 DLEQ **一次仕様を GitHub raw 経由で取得・検証**
