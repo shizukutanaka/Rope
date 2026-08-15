@@ -88,6 +88,35 @@ against HEAD before trusting anything past `830d8c4`.
   peers (`check_feasibility` gate). The underlying attestation chain itself
   is still fake (§1.1). README has a disclosure note about this
   (`README.md:84-89`) linking `docs/RESEARCH_IMPROVEMENTS.md` #2.
+- **2026-08-08 update — both sides now concrete**
+  ([`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §4g).
+  This entry previously stated only the *capability gap* ("consumer RTX
+  lacks CC"). Two papers make the trade-off specific:
+  - **Supply-side economics are settled and excellent**
+    (arXiv:2601.09527, 79 benchmark configs on RTX 5060 Ti/5070 Ti/5090):
+    self-hosted inference costs **$0.001-0.04 per million tokens**
+    (electricity), **40-200x cheaper** than budget-tier cloud APIs, with
+    hardware breaking even in **under four months** at 30M tokens/day.
+    Rope's "under a dollar" promise leaves the lender a large margin.
+    NVFP4 gives **1.6x throughput over BF16, 41% less energy, 2-4% quality
+    loss** — directly usable when picking model formats for A3.
+    ⚠️ **That paper's "Private" means *local deployment*, NOT Confidential
+    Computing.** Consumer Blackwell did **not** gain CC. **W4 is not
+    resolved by it.**
+  - **What A6 is actually up against without CC**: CloakLM
+    (arXiv:2606.18400) is software-only memory obfuscation, and the attacks
+    it cites are the concrete threat — **Hermes** reconstructs a DNN
+    losslessly from **PCIe bus observation alone**; **TunnelS** exfiltrates
+    **HBM contents at high throughput via driver-level access without
+    interrupting inference**. A lender who physically owns the hardware has
+    both. **Software-only defenses buy friction, not a guarantee** —
+    CloakLM itself is framed as mitigation.
+  - **Three product options** (`decision` — not settled by research):
+    1. Keep `Privacy::ConfidentialCompute` restricted to CC-capable peers
+       (current routing guard — honest and correct)
+    2. Define a **weaker, honestly-labeled** privacy level for consumer GPUs
+       (an explicit "obfuscation only / no guarantee" variant)
+    3. Treat consumer GPUs as **non-sensitive workloads only**
 
 ### 1.5 CI defined but not activated `[BLOCKED:consent]`
 - `.github/ci.yml.disabled` has a complete 5-job pipeline (check/test/

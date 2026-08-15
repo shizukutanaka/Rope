@@ -540,6 +540,80 @@ attention を分割して再転送を減らす。Intel TDX 上で **TSDP 比 2.6
 
 ---
 
+## 4g. W4 の再訪 — 消費者 GPU の経済性は確定、しかし「Private ≠ CC」
+
+W4 (TEE プライバシー訴求 vs 消費者 GPU の CC 非対応) は本調査を通じて
+「解消していない」とし続けた唯一の構造的矛盾。今回、消費者 GPU を正面から
+扱う 2 件が見つかった。**結論を先に言えば W4 は解消しない — が、
+供給側の経済性が査読級のベンチマークで確定し、A6 が消費者 GPU 上で
+何と戦うことになるかが具体化した。**
+
+### (a) 消費者 Blackwell の実測 (arXiv:2601.09527) — ただし "Private" = ローカル配備
+
+"Private LLM Inference on Consumer Blackwell GPUs" (Knoop & Holtmann,
+2026-01)。RTX 5060 Ti / 5070 Ti / 5090 で 4 モデル
+(Qwen3-8B / Gemma3-12B / Gemma3-27B / GPT-OSS-20B) × 量子化 4 形式
+(BF16 / W4A16 / NVFP4 / MXFP4) × 文脈長 8k-64k、**計 79 構成**を
+ベンチマーク。GitHub でコードとデータを公開済み。
+
+**⚠️ 最重要の注意**: この論文の "Private" は **「データが手元から出ない
+(ローカル配備)」の意味であり、Confidential Computing ではない**。
+RTX 50 シリーズ (消費者 Blackwell) に CC が来た、という話では**ない**。
+**W4 はこの論文によっても解消しない。**
+
+それでも Rope に直結する数値が 3 つある:
+
+1. **供給側の経済性が確定**: セルフホスト推論の電力コストは
+   **$0.001-0.04 / 100 万トークン** — クラウド API の budget 帯より
+   **40-200 倍安い**。ハードウェアは中程度の量 (30M トークン/日) で
+   **4 ヶ月未満で回収**。→ Rope の「1 ドル未満」の約束は、貸し手の
+   原価に対して**巨大なマージン**を残す。貸し手が儲かる構造は成立する
+   (§4f の「供給の実在」に経済性の裏付けが加わった)。
+2. **量子化の実測**: NVFP4 は BF16 比で **1.6 倍のスループット +
+   41% の省エネ、品質低下 2-4%**。→ A3 実装時のモデル形式選定
+   (GGUF/量子化) に直接使える数値。
+3. **GPU 帯の性能差**: RTX 5090 は 5060 Ti の 3.5-4.6 倍のスループット
+   (RAG では 21 倍低レイテンシ) だが、**API ワークロードの
+   スループット/ドルは budget GPU が最高**。→ Rope の supply pool は
+   高級カードだけでなく budget カードにも意味がある —
+   `capabilities.vram_gb` で最良ピアを選ぶ現行ロジック
+   (`first_run.rs:347-354` は VRAM 最大を選ぶ) は
+   **ワークロードによっては最適でない**可能性 (throughput/$ 最適とは別軸)。
+
+### (b) CloakLM (arXiv:2606.18400) と、その引用が示す A6 の敵
+
+Georgia Tech の CloakLM は **TEE なしでモデル重みの exfiltration を緩和する
+ソフトウェアのみのメモリ難読化**。Rope の A6 (借り手のプロンプト保護) とは
+守る対象が逆 (貸し手のモデル保護) だが、**引用されている攻撃**が
+Rope にとって重要:
+
+- **Hermes**: PCIe バスの観測だけから **DNN を無損失で再構成**
+- **TunnelS**: ドライバレベルのアクセスで **HBM の内容を高スループットで
+  exfiltration** (推論を中断させずに)
+
+→ **これが「CC の無い消費者 GPU 上で A6 が戦う相手」の具体像**。
+ハードウェアを物理的に所有する貸し手は、PCIe 観測もドライバアクセスも
+自由にできる。**ソフトウェアのみの防御 (難読化等) は「摩擦」にはなるが
+「保証」にはならない** — CloakLM 自身も mitigation (緩和) と位置づけている。
+
+### 判断: W4 の記述を「より確定的」に更新する
+
+- 従来の W4 は「消費者 RTX は CC 非対応」という**能力の欠如**の指摘だった。
+  今回の 2 件により、(a) 消費者 GPU の供給側経済性は極めて良好、
+  (b) しかし CC なしでは Hermes/TunnelS 級の攻撃に対する**保証は原理的に
+  提供できない**、という**両面が具体化**した。
+- 帰結として、Rope の選択肢は 3 つに整理される:
+  1. `Privacy::ConfidentialCompute` は **datacenter/workstation 級
+     (Hopper/Blackwell CC 対応) ピアに限定**し続ける (現行の
+     ルーティングガードの方針を維持 — 正直で正しい)
+  2. 消費者 GPU 向けには **より弱い保証レベルを正直に定義**する
+     (「難読化のみ」「保証なし」を明示する Privacy variant — 製品判断)
+  3. 消費者 GPU は **機微でないワークロード専用**と割り切る
+- いずれも製品判断であり本調査では決めない。`SURPLUS_AND_GAPS.md` §1.4 に
+  この 3 択と根拠を追記する。
+
+---
+
 ## 5. 今回の調査が既存文書に要求する更新
 
 | 更新先 | 内容 | 根拠 |
@@ -556,6 +630,7 @@ attention を分割して再転送を減らす。Intel TDX 上で **TSDP 比 2.6
 | `RESEARCH_IMPROVEMENTS.md` #2/#3 (TEE) | **CC オーバーヘッドの実測値を追加** (GPU 計算 0.998x = ほぼ無損失 / サービング全体 13-27% 損失 / 原因は CVM-GPU ブリッジ)。**Rope の短ジョブ特性は最悪ケース**であり A6 と A8 が構造的に緊張する点を明記 | §4e |
 | `RESEARCH_IMPROVEMENTS.md` #11 (cold start) | **「高優先」→「A8 の成立条件」に格上げ** — cold start 実測 40 秒超に対し 60 秒の約束は cold start を含められない。小型モデル常駐が前提条件 | §4f |
 | `FIRST_PRINCIPLES_AUDIT.md` §4 | **A8 の隠れた前提「ウォームな貸し手」を明文化**。供給側の実在 (Petals 800+ ノード / BOINC / 稼働率 40-65%) は裏付け済み | §4f |
+| `SURPLUS_AND_GAPS.md` §1.4 (W4) | **W4 を両面で具体化** — 消費者 GPU の経済性は確定 ($0.001-0.04/M tokens、40-200 倍安)、しかし Hermes/TunnelS 級攻撃への保証は CC なしでは原理的に不可。3 つの製品選択肢を記録 | §4g |
 | `CLAUDE.md` 改善案表 | 推論エンジン行に mistral.rs を明記 | §2 |
 
 ---
@@ -590,6 +665,8 @@ attention を分割して再転送を減らす。Intel TDX 上で **TSDP 比 2.6
 - ACM AIBC 2025 (doi 10.1145/3775043.3775047) — Idle Consumer GPUs as a Complement to Enterprise Hardware (査読付き)
 - Spheron / Microsoft Community Hub / Cerebrium (2026) — GPU cold start の 4 フェーズ実測・keep-warm 経済
 - Petals (800+ ノード実証) / BOINC (500 万台前例) — P2P・ボランティア計算の実行可能性
+- arXiv:2601.09527 — Private LLM Inference on Consumer Blackwell GPUs (79 構成ベンチ、"Private"=ローカル配備であって CC ではない点に注意)
+- arXiv:2606.18400 — CloakLM (SW のみのメモリ難読化)。引用する Hermes (PCIe 観測から DNN 無損失再構成) / TunnelS (ドライバ経由 HBM exfiltration) が消費者 GPU 上の A6 の敵の具体像
 - iroh `MdnsDiscovery` / `swarm-discovery` / pkarr — 発見機構 (DeepWiki, iroh 0.20 リリースノート)
 - `keepsimple1/mdns-sd` — pure Rust mDNS (Iroh 非採用時の代替候補、作者は beta と位置づけ)
 - `cashubtc/nuts` `12.md` — NUT-12 DLEQ **一次仕様を GitHub raw 経由で取得・検証**
