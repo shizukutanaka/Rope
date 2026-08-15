@@ -309,6 +309,22 @@ against HEAD before trusting anything past `830d8c4`.
   lifecycle superseded it. **Do not delete based on "zero callers" alone —
   that heuristic was correct for §2.1's items and wrong-shaped for this
   cluster.**
+- **2026-08-08 — the deferred decision now has a deductive answer**
+  ([`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §4h):
+  the first-principles audit initially judged this cluster as mapping to
+  **no axiom at all**, which added a second argument for deletion. That
+  judgment was **wrong — the axiom set was incomplete**. A1-A7 all encode
+  what the *borrower* needs; nothing encoded what the *lender* needs.
+  Adding **A9 (the lender must be able to protect themselves from the
+  borrower)** resolves it: `panic_stop` raises `STOP_REQUESTED`, then
+  enumerates Rope's containers via `docker ps -q --filter name=rope-` and
+  `docker kill`s them (`session.rs:360-380`) — that **is** the lender's
+  emergency stop, i.e. option (a) above, not leftover scaffolding.
+  → **Remove this cluster from deletion consideration.** What remains open
+  is narrower and purely technical: `panic_stop` assumes docker, while the
+  2026 consensus for untrusted workloads is gVisor/Firecracker-class
+  isolation, so the mechanism must be reconciled with whatever sandbox A3
+  picks.
 
 ### 2.5 Hardcoded sats↔USD conversion rate `[PARTIALLY ADDRESSED — DRY, still a fixed rate]`
 - Previously `src/main.rs` and `src/core/first_run.rs` both hardcoded
