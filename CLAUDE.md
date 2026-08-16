@@ -79,11 +79,11 @@ W7/W8 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashMa
 | 優先 | 改善案 | ブロッカー | 着手の手引き |
 |------|--------|-----------|-------------|
 | 最高 | 実 P2P 結線 (mDNS→Noise→NAT 越え) | `build` (新規 crate 要) | [`docs/P2P_IMPLEMENTATION_READINESS.md`](docs/P2P_IMPLEMENTATION_READINESS.md) — libp2p vs Iroh 比較・段階手順あり |
-| 最高 | **推論エンジン統合 (実際に計算を実行する能力)** | `build` (**mistral.rs 推奨**) | **第一原理監査で「型すら存在しない唯一の公理 (A3)」と判明** — 他は型だけでも在る。**最小充足条件は `FIRST_PRINCIPLES_AUDIT.md` §8 に演繹済み** (CPU・非決定論的・非TEE・ローカルモデルパスで A3 は満たせる / 置き場所は `net/inference.rs` + feature 分離が既存アーキと整合)。crate 比較は `RESEARCH_UPDATE_2026-07.md` §6 |
+| 最高 | **推論エンジン統合 (実際に計算を実行する能力)** | `build` (**mistral.rs 推奨**) | **第一原理監査で「型すら存在しない唯一の公理 (A3)」と判明** — 他は型だけでも在る。**最小充足条件は `FIRST_PRINCIPLES_AUDIT.md` §8 に演繹済み** (CPU・非決定論的・非TEE・ローカルモデルパスで A3 は満たせる / 置き場所は `net/inference.rs` + feature 分離が既存アーキと整合)。crate 比較は `RESEARCH_UPDATE_2026-07.md` §6。**⚠️ A3 は A9 (サンドボックス隔離) と不可分** — 実行させることは隔離を要求する。`Workload::Inference` と `Train/RAG` を別脅威モデルで扱う (`RESEARCH_UPDATE_2026-08.md` §4h) |
 | 高 | 実 BDHKE (Cashu 盲目署名) | `build` (k256 要) | [`docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md`](docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md) — NUT-00 数式検証済・DoD あり。第一原理では A5 は A1/A3 に依存する後段 (`FIRST_PRINCIPLES_AUDIT.md` §4) |
 | 高 | 検証エンジン (proof-of-execution) | **A3 (推論実行) が前提** | `SURPLUS_AND_GAPS.md` §1.3。第一原理では A3 の後段。**⚠️ 手法選定の前に [`RESEARCH_UPDATE_2026-08.md`](docs/RESEARCH_UPDATE_2026-08.md) §1 を読むこと** — Hollow-LLM 攻撃 (IEEE S&P'26) が「出力の正しさだけを見る検証」を破るため、**投入計算量の検証**を受け入れ基準に含める必要がある |
 | 高 | CI 有効化 (`.github/workflows/` へ移動) | **`consent`** (secrets アクセス) | ユーザーの明示同意なしに移動しない。`.disabled` 内容は改善済 |
-| 中 | `session.rs` 10 関数クラスターの削除/配線 | **`decision`** (製品判断) | `SURPLUS_AND_GAPS.md` §2.4 — 「呼出ゼロ」だけで削除しない (緊急停止コード) |
+| 中 | `session.rs` `panic_stop` クラスターを A3 の隔離 (A9) と整合させる | **`decision`** (製品判断) | **⚠️ 2026-08-08 訂正**: 当初「削除候補」としたが `panic_stop` は **A9 (貸し手の緊急停止) に対応**するため削除しない。docker 前提を A3 実装時の隔離技術 (gVisor/Firecracker) と整合させる (`SURPLUS_AND_GAPS.md` §2.4, `RESEARCH_UPDATE_2026-08.md` §4h) |
 | 中低 | 永続化 WAL 化、sats→USD の実価格フィード | 実 ecash 結線と連動 | §1.6, §2.5 |
 
 **新研究**: 2026-07 時点の関連論文・スタック更新は

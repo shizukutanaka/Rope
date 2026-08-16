@@ -723,6 +723,7 @@ A9 は貸し手の *参加条件* を与える。**自分のマシンが壊さ�
 | `RESEARCH_IMPROVEMENTS.md` #2/#3 (TEE) | **CC オーバーヘッドの実測値を追加** (GPU 計算 0.998x = ほぼ無損失 / サービング全体 13-27% 損失 / 原因は CVM-GPU ブリッジ)。**Rope の短ジョブ特性は最悪ケース**であり A6 と A8 が構造的に緊張する点を明記 | §4e |
 | `RESEARCH_IMPROVEMENTS.md` #11 (cold start) | **「高優先」→「A8 の成立条件」に格上げ** — cold start 実測 40 秒超に対し 60 秒の約束は cold start を含められない。小型モデル常駐が前提条件 | §4f |
 | `FIRST_PRINCIPLES_AUDIT.md` §4 | **A8 の隠れた前提「ウォームな貸し手」を明文化**。供給側の実在 (Petals 800+ ノード / BOINC / 稼働率 40-65%) は裏付け済み | §4f |
+| `FIRST_PRINCIPLES_AUDIT.md` §2/§4 追補 | A9 を §2 マッピング表 (△/✗、`panic_stop` は型のみ CLI 未到達) と依存グラフ (A3 と不可分 = 実行させることは隔離を要求) に反映。推奨順序を「A3 + A9 同スコープ」に更新。`CLAUDE.md` 改善案表も session.rs 行を「削除」→「A9 対応で保持」に訂正 | §4h |
 | `FIRST_PRINCIPLES_AUDIT.md` §1/§3/§4 | **🔴 A9 (貸し手の保護) を公理として追加し、`session.rs` 評価の誤りを訂正** (`panic_stop` は docker コンテナを kill する = A9 に直接対応。「どの公理にも対応しない」は公理集合が不完全だったための誤判定)。`A6 ⊥ A9` を依存グラフに追加 | §4h |
 | `SURPLUS_AND_GAPS.md` §1.4 (W4) | **W4 を両面で具体化** — 消費者 GPU の経済性は確定 ($0.001-0.04/M tokens、40-200 倍安)、しかし Hermes/TunnelS 級攻撃への保証は CC なしでは原理的に不可。3 つの製品選択肢を記録 | §4g |
 | `CLAUDE.md` 改善案表 | 推論エンジン行に mistral.rs を明記 | §2 |
