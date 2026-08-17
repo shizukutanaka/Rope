@@ -931,6 +931,94 @@ no-token の少額決済は誰も出荷していない。
 
 ---
 
+## 4l. データフェッチとモデルロードの脅威 — 「モデルを読む」こと自体がコード実行
+
+§4h/§4j で「`Train`/`RAG` は借り手指定 URI をフェッチする」と書いた。
+**まず自分の記述を訂正する。**
+
+### ⚠️ 自己訂正: URI を持つのは `Train` だけ、`Retrieve` は識別子
+
+`Workload` (`intent.rs:124-144`) を再確認した実際の形:
+
+| variant | 借り手が渡すもの | URI フェッチ |
+|---|---|---|
+| `Inference { model, prompt_tokens_est, max_output_tokens }` | **`model: String`** (モデル名) | 型上は無し |
+| `Train { base_model, dataset_uri, method, target_steps }` | **`base_model: String` + `dataset_uri: String`** | **あり** |
+| `Retrieve { corpus_id, query, top_k }` | **`corpus_id: String`** (識別子) + query | **無し** — corpus は事前登録された ID |
+
+→ **`Retrieve` は URI を取らない**。「Train/RAG が URI をフェッチする」と
+複数箇所に書いたのは不正確で、**URI フェッチの露出は `Train` のみ**。
+`Retrieve` の `corpus_id` は貸し手側に既にある corpus を指す識別子であり、
+**設計上むしろ安全側**だった。
+
+### 🔴 より重い発見: `model` / `base_model` は素の `String` で、型が何も制約しない
+
+3 つの variant すべてでモデル指定は **`String`**。型は
+**フォーマットも取得元も制約しない**。つまり
+「借り手が名前を渡す → 貸し手がそれを解決してロードする」経路を実装が
+どう作るかで、**安全にも RCE にもなる**。そして 2026 年の一次情報は、
+これが理論上の懸念ではないことを示す:
+
+- **pickle のデシリアライズはロード中に任意コードを実行する**。
+  信頼できない PyTorch モデルをロードすることは、**任意コード実行と等価**
+  (データ持ち出し・バックドア設置が可能)。
+- **CVE-2026-25874** (Hugging Face **LeRobot**): gRPC 経由の unsafe pickle で
+  **認証不要の RCE**。要点は「**バリデータがオブジェクトを見るのは pickle が
+  それを構築した後** = `__reduce__` が既に走った後」という構造。
+  **検証してから使う、では遅い。**
+- **スキャナは回避される**: ShadowPickle の報告では最良の "Overwritten" 変種が
+  **10 種のスキャナに対し 63% の回避率**。→ **「pickle をスキャンする」は
+  防御にならない。**
+- **SafeTensors は生のテンソルのみを格納し、ロード時にコードを一切実行しない**。
+  Hugging Face Hub の既定フォーマット。**これが実際の緩和策。**
+
+→ **A9 (貸し手の保護) の絶対条件が 1 つ確定する**:
+**借り手が指定した重みを、コードを実行しうる形式 (pickle/`torch.load`) で
+デシリアライズしてはならない。** SafeTensors か GGUF に限定し、
+**スキャンではなく形式そのもので制約する**こと。
+これは実装時の選択ではなく、**A9 が要求する制約**。
+
+### SSRF: 素朴な検証は DNS リバインディングで破られる
+
+`Train.dataset_uri` を貸し手がフェッチする以上、SSRF 対策が要る。
+2026 年時点の一次情報:
+
+- **DNS リバインディングはホスト名ベースの allowlist を破る**: 攻撃者が
+  短い TTL のドメインを登録し、**検証時は正当な公開 IP を返し、
+  実際の HTTP リクエストの直前に内部 IP へ切り替える**。
+- **これは 2026 年の現役の脆弱性クラス**: **CVE-2026-27826** (MCP Atlassian) は
+  **SSRF 修正そのものを DNS リバインディング TOCTOU で回避**した事例。
+- **正しい緩和は DNS ピンニング**: ホスト名を **一度だけ解決し、その IP を検証し、
+  以降の接続にその IP を使う** — 再解決させない。
+- **Rust では実装可能**: **`reqwest::dns` が DNS 解決をカスタマイズする trait を
+  提供**しており、**IP ピンニングと検証を接続前に挟める**。
+  Rope は既に `http` feature で reqwest を使っているため、**新規依存は不要**。
+- **ブロックすべき範囲の抜け**: private/loopback/link-local/multicast/
+  documentation/unspecified に加えて **`0.0.0.0` と `255.255.255.255`** も塞ぐこと。
+  Rust の実例として **GHSA-q537-8fr5-cw35** — `activitypub-federation-rust` の
+  `v4_is_invalid()` が **`0.0.0.0` を見落として SSRF になった**。
+  **「private かどうか」だけ見る実装は不十分。**
+
+### A3+A9 実装時の確定した制約 (本調査で導かれた分)
+
+1. **モデル形式を SafeTensors / GGUF に限定する** — pickle 系は受け付けない。
+   スキャンで通そうとしない (63% 回避される)。
+2. **`dataset_uri` のフェッチは DNS ピンニングで実装する** —
+   `reqwest::dns` の trait を使い、解決 → IP 検証 → その IP で接続。
+   ホスト名の allowlist だけでは CVE-2026-27826 と同型の穴が残る。
+3. **IP 検証は `0.0.0.0`/`255.255.255.255` を含める** (Rust の実例あり)。
+4. **`model: String` に型レベルの制約が無いことを認識する** —
+   「名前を受け取って解決する」層で形式と取得元を強制するしかない。
+   ここは `newtype` (例: `SafeModelRef`) で型に落とす価値がある設計判断。
+
+### 限界
+
+- CVE/GHSA は**要旨と解説記事ベース**。一次アドバイザリ本文は未読。
+- `reqwest::dns` trait の**具体的な API 形状は未確認** (docs.rs は egress ブロック)。
+  実装時に `cargo doc` で確認が必要。
+
+---
+
 ## 5. 今回の調査が既存文書に要求する更新
 
 | 更新先 | 内容 | 根拠 |
@@ -947,6 +1035,8 @@ no-token の少額決済は誰も出荷していない。
 | `RESEARCH_IMPROVEMENTS.md` #2/#3 (TEE) | **CC オーバーヘッドの実測値を追加** (GPU 計算 0.998x = ほぼ無損失 / サービング全体 13-27% 損失 / 原因は CVM-GPU ブリッジ)。**Rope の短ジョブ特性は最悪ケース**であり A6 と A8 が構造的に緊張する点を明記 | §4e |
 | `RESEARCH_IMPROVEMENTS.md` #11 (cold start) | **「高優先」→「A8 の成立条件」に格上げ** — cold start 実測 40 秒超に対し 60 秒の約束は cold start を含められない。小型モデル常駐が前提条件 | §4f |
 | `FIRST_PRINCIPLES_AUDIT.md` §4 | **A8 の隠れた前提「ウォームな貸し手」を明文化**。供給側の実在 (Petals 800+ ノード / BOINC / 稼働率 40-65%) は裏付け済み | §4f |
+| §4h/§4j の「Train/RAG が URI をフェッチ」記述 | **⚠️ 自己訂正** — `Retrieve` は `corpus_id` (識別子) で URI を取らない。**URI フェッチは `Train` のみ**。`Retrieve` は設計上むしろ安全側だった | §4l |
+| `SURPLUS_AND_GAPS.md` (A9 実装制約) | **モデル形式を SafeTensors/GGUF に限定** (pickle ロード = RCE、スキャナは 63% 回避される) / **`dataset_uri` は DNS ピンニングでフェッチ** (`reqwest::dns` trait、新規依存不要) / **IP 検証に `0.0.0.0` を含める** | §4l |
 | `README.md` 競合比較表 | **🔴 訂正済** — Rope 列の ✅ 5 件のうち 4 件が未実装能力だった。✅ (動く) / 🔶 (設計のみ) を区別し、実際に提供できているのは「独自トークン不要」「ゼロコンフィグ」の 2 つだけと明記。新規競合 Cocoon も追記 | §4k |
 | `FIRST_PRINCIPLES_AUDIT.md` §4 | **`A9 ⊥ A8` を追加** — GPU 呼び出しに介在できるのは gVisor+nvproxy のみだが導入が要る (A8 を壊す)。pure Rust crate は追加インストール不要だが GPU レベルは無防備。Firecracker は GPU 非対応で失格 | §4j |
 | `FIRST_PRINCIPLES_AUDIT.md` §4 / `SURPLUS_AND_GAPS.md` | **🔴 `A9 → A7` の欠落した辺を追加** — `panic_stop` はセッションファイルを消すが ecash に触れず、escrow の自動返金は deadman (既定 60 分) 頼み。**貸し手が緊急停止しても借り手の資金は最大 60 分ロック**。A3+A9 実装時に顕在化 | §4i |
@@ -987,6 +1077,8 @@ no-token の少額決済は誰も出荷していない。
 - ACM AIBC 2025 (doi 10.1145/3775043.3775047) — Idle Consumer GPUs as a Complement to Enterprise Hardware (査読付き)
 - Spheron / Microsoft Community Hub / Cerebrium (2026) — GPU cold start の 4 フェーズ実測・keep-warm 経済
 - Petals (800+ ノード実証) / BOINC (500 万台前例) — P2P・ボランティア計算の実行可能性
+- CVE-2026-25874 (HuggingFace LeRobot、gRPC 経由の unsafe pickle で認証不要 RCE) / ShadowPickle (スキャナ回避率 63%) / SafeTensors (ロード時にコード実行しない)
+- CVE-2026-27826 (MCP Atlassian、DNS リバインディング TOCTOU で SSRF 修正を回避) / GHSA-q537-8fr5-cw35 (`activitypub-federation-rust` が `0.0.0.0` を見落とし SSRF) / `reqwest::dns` (DNS 解決カスタマイズ trait)
 - Cocoon (Confidential Compute Open Network, TON 上) — GPU 所有者に**プライベート推論の対価**を払う、Rope とほぼ同一 wedge の新規競合
 - Render/Dispersed.com (2025-12) / Aethir / Fluence / Nosana / iExec / Argentum AI — 2026 時点の同分野プレイヤー
 - SharedLLM 比較記事 / petals.dev / EXO 各種 — Petals は現役 (Llama-2 70B で最大 6 tok/s)、EXO は VC 資金のリスク指摘あり

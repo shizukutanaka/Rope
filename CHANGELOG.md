@@ -208,6 +208,26 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
   **ecash や Lightning の GPU マーケットは見つからなかった** → 「独自トークン不要」は
   表の中で唯一「実装状態に依存せず、かつ競合が誰も持っていない」差別化であり、
   **Rope が最初に証明すべき固有価値はここかもしれない** (A1/A3 は競合が既に持つ能力)
+  (16) **A9 の絶対条件が 2 つ確定 — 「モデルを読む」こと自体がコード実行** —
+  (a) **pickle のデシリアライズはロード中に任意コードを実行する**ため、借り手指定の重みを
+  pickle 形式で読むことは **RCE と等価**。CVE-2026-25874 (HuggingFace LeRobot) が
+  gRPC 経由の unsafe pickle で**認証不要 RCE** を起こしており、その構造が示唆的 —
+  **バリデータがオブジェクトを見るのは pickle が構築した後** (`__reduce__` 実行後)。
+  **スキャンも防御にならない** (ShadowPickle: 10 スキャナに対し **63% 回避**)。
+  → **形式で制約する: SafeTensors/GGUF のみ受け付け、`torch.load`/pickle は使わない**。
+  加えて `model`/`base_model` は**素の `String`** (`intent.rs:127,133`) で型が
+  形式も取得元も制約しないため、**newtype 化する価値がある**。
+  (b) **`dataset_uri` のフェッチは DNS ピンニングが必須** — ホスト名 allowlist は
+  **DNS リバインディングで破られる** (短 TTL で検証時は公開 IP、リクエスト直前に内部 IP)。
+  **CVE-2026-27826 (MCP Atlassian) は SSRF 修正そのものをこの手口で回避した 2026 の事例**。
+  **`reqwest::dns` が解決をカスタマイズする trait を提供**しており Rope は既に reqwest に
+  依存しているため**新規依存不要**。IP 検証には **`0.0.0.0`/`255.255.255.255` も含める**
+  (Rust の実例: GHSA-q537-8fr5-cw35 — `activitypub-federation-rust` が `0.0.0.0` を
+  見落として SSRF)。`SURPLUS_AND_GAPS.md` §1.11 に記録。
+  **⚠️ 併せて自己訂正**: §4h/§4j で「Train/RAG が借り手指定 URI をフェッチする」と
+  複数回書いたが、`Retrieve` は **`corpus_id` (貸し手側に既にある corpus の識別子)** で
+  **URI を取らない** — **URI フェッチの露出は `Train` のみ**であり、`Retrieve` は
+  設計上むしろ安全側だった
   **調査の限界も明記**: arxiv.org が egress proxy でブロックされるため論文は要旨のみ、
   crates.io 個別ページも取得不可 — 未確定事項を確定として扱わない
 - **`docs/FIRST_PRINCIPLES_AUDIT.md`** — First Principles Thinking による機能の

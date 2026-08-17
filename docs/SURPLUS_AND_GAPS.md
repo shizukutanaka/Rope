@@ -257,6 +257,46 @@ against HEAD before trusting anything past `830d8c4`.
     weakens the borrower's funds. The "don't refund completed work"
     condition is what resolves it.
 
+### 1.11 A9 hard constraints for the A3 wiring — model format and URI fetching `[OPEN, must be satisfied when A3+A9 land]`
+- From the 2026 threat research
+  ([`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §4l). These are
+  not preferences; they are what A9 (lender protection) requires once the
+  lender actually loads borrower-named models and fetches borrower-named URIs.
+- **Correction to earlier entries**: §4h/§4j said "Train/RAG fetch a
+  borrower-supplied URI". Re-checking `Workload` (`intent.rs:124-144`):
+  `Retrieve` takes `corpus_id` — an **identifier for a corpus the lender
+  already has**, not a URI. **Only `Train.dataset_uri` is a fetched URI.**
+  `Retrieve` is the safer design, not an exposure.
+- **Loading a model is code execution unless the format forbids it.**
+  Pickle deserialization runs arbitrary code *during* load. CVE-2026-25874
+  (HuggingFace LeRobot) is a 2026 unauthenticated RCE through exactly this,
+  and its shape is instructive: the validator only sees the object *after*
+  pickle constructed it, i.e. after `__reduce__` already ran. Scanning does
+  not close it either — ShadowPickle reports a 63% evasion rate across ten
+  scanners. **SafeTensors stores raw tensors and executes no code on load.**
+  → **Constrain by format, not by scanning: accept SafeTensors/GGUF only,
+  never `torch.load`/pickle on borrower-specified weights.**
+- **`model` and `base_model` are bare `String`s** (`intent.rs:127,133`) — the
+  type constrains neither format nor origin. Whatever layer resolves a name
+  into weights is the only thing standing between a borrower's string and the
+  lender's process. Worth lifting into a newtype (e.g. `SafeModelRef`) so the
+  constraint is expressed in the type rather than in a comment.
+- **Fetching `dataset_uri` needs DNS pinning, not hostname allowlisting.**
+  DNS rebinding defeats hostname checks: short TTL, resolve to a public IP for
+  validation, flip to an internal IP before the request. CVE-2026-27826 (MCP
+  Atlassian) is a 2026 case of exactly this **bypassing an existing SSRF
+  fix**. The fix is to resolve once, validate that IP, and connect to *that
+  IP* so no re-resolution can occur. **`reqwest::dns` exposes a trait for
+  customizing resolution**, and Rope already depends on reqwest under the
+  `http` feature — **no new dependency needed**.
+- **IP validation must include `0.0.0.0` and `255.255.255.255`**, not just
+  private/loopback/link-local/multicast/documentation/unspecified. Rust
+  precedent: GHSA-q537-8fr5-cw35, where `activitypub-federation-rust`'s
+  `v4_is_invalid()` missed `0.0.0.0` and became an SSRF.
+- Limits: CVE/GHSA read at summary level, advisories themselves unread;
+  `reqwest::dns`'s exact API shape unverified (docs.rs is egress-blocked here)
+  — confirm with `cargo doc` at implementation time.
+
 ---
 
 ## 2. SURPLUS (過剰) — code/commitments beyond what's currently backed by use or roadmap
