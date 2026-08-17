@@ -773,6 +773,93 @@ A7 (「中断しても双方が損しない」) が、**A9 の行使経路では
 
 ---
 
+## 4j. A9 のサンドボックス選定 — GPU 要件が選択肢をほぼ一つに絞る
+
+§4h は「2026 のコンセンサスは gVisor/Firecracker 級」と記録したが、
+**Rope は GPU を使わせる**という制約を掛けていなかった。掛けると答えが変わる。
+
+### GPU パススルーの可否が決定的
+
+- **Firecracker は GPU パススルーを *意図的に* サポートしない** — ミニマリスト
+  設計の一環として除外されている。GPU パススルーには VFIO バインディング・
+  IOMMU 設定・PCIe パススルー対応 VMM が要るが、Firecracker の最小 virtio
+  デバイス集合はこれらを含まない。→ **Firecracker は CPU 専用。Rope では失格。**
+- **gVisor も「パススルー」はしない**が、**別の道を持つ**: **nvproxy** が
+  コンテナ内アプリの NVIDIA デバイスへの `ioctl(2)` を**ユーザ空間で捕捉し
+  ホストドライバへ転送する**。→ **GPU を使わせながら、GPU 呼び出しそのものに
+  介在できる唯一の選択肢。**
+
+→ §4h の「gVisor/Firecracker 級」という並列表記は、**GPU を要求した瞬間に
+gVisor 一択になる**。この絞り込みは実装スコープの確定に直接効く。
+
+### pure Rust の in-process サンドボックス群 — A8 と噛み合う対抗馬
+
+Rope は Rust CLI で pure Rust 依存方針。調べると **docker を要さない
+pure Rust の隔離 crate が複数存在する**:
+
+| crate | 提供する隔離 | 特筆点 |
+|---|---|---|
+| `sandbox-rs` | Linux namespace / **cgroup v2 リソース制限** / seccomp BPF / Landlock / プロセス監視 | **unprivileged モードは root 不要** (user namespace + seccomp + landlock + setrlimit) |
+| `sandlock-core` | Landlock (fs + network + IPC) / seccomp-bpf / seccomp user notification | **root も cgroups も コンテナも不要** |
+| `hakoniwa` | namespace / rlimit / landlock / seccomp | 同系統 |
+| `landlock` | Landlock syscall の安全な抽象 | Linux **5.13+** が前提 |
+
+これらは **docker 前提の `panic_stop` を置き換えうる** — しかも
+「docker のインストールを要求しない」ため **A8 (ゼロコンフィグ) と噛み合う**。
+
+### 🔴 しかし決定的な限界: これらは GPU 呼び出しに介在しない
+
+Landlock はファイルシステムを制限する。GPU アクセスは `/dev/nvidia*` の
+デバイスノード経由なので、**Landlock でノードを塞ぐか通すかは選べる**。
+だが**通した瞬間、§4h で挙げた GPU レベルの攻撃面**
+(CVE-2026-22164 の権限昇格、同一 GPU 上の side channel) **がそのまま残る**。
+**GPU 呼び出しに介在するのは gVisor の nvproxy だけ**。
+
+### 演繹される新しい構造的緊張: `A9 ⊥ A8` (サンドボックス選択を経由して)
+
+| 選択 | A9 (貸し手の保護) | A8 (ゼロコンフィグ) |
+|---|---|---|
+| **gVisor + nvproxy** | GPU 呼び出しに介在できる = **強い** | gVisor の導入・設定が要る = **壊れる** |
+| **pure Rust crate 群** | プロセス隔離のみ、**GPU レベルは無防備** | 追加インストール不要 = **保たれる** |
+| docker (現行 `panic_stop` の前提) | 中間。GPU は通せるが介在しない | docker 導入が要る = **壊れる** |
+
+→ **A6 ⊥ A8 と同じ形の緊張が、A9 でも成立する**。しかも**同じ根っこ**:
+「消費者マシン上で、設定ゼロで、他人の計算を安全に走らせる」ことの困難さ。
+
+### 追加の制約: どれも Linux 前提
+
+`landlock` は **Linux 5.13+**、seccomp も Linux、gVisor も Linux。
+Rope の供給プールは消費者マシン (macOS / Windows を含む) を想定している以上、
+**「他人のアイドル GPU」の相当部分でこれらは使えない**。
+これは W4 (消費者 GPU に CC が無い) と**独立した第二の OS 制約**。
+
+### 判断: A3+A9 のスコープに入れるべき設計判断リスト
+
+本調査で確定した分だけを列挙する (未確定は下記「限界」に分離):
+
+1. **Firecracker は検討から外してよい** (GPU パススルー非対応、設計思想として除外)
+2. **GPU レベルの保護を求めるなら gVisor + nvproxy が事実上の一択** —
+   ただし A8 を壊す
+3. **A8 を優先するなら pure Rust crate (`sandbox-rs` / `sandlock-core` 等) で
+   プロセス隔離まで**。GPU レベルは**保護されないことを正直に開示する**必要がある
+   (`SECURITY.md` の分離開示パターンに従う)
+4. **どちらも Linux 限定**。macOS/Windows の貸し手をどう扱うかは製品判断
+5. `panic_stop` の docker 前提は、上記 2/3 のどちらを選ぶかで置き換え先が変わる —
+   **A3 実装前にこの選択を確定させる必要がある** (後から差し替えると
+   `session.rs` のクラスター全体が影響を受ける)
+
+### この調査の限界 (正直な記録)
+
+- 各 crate の **MSRV / 依存ツリー / メンテ状況は未確認** (crates.io の個別ページは
+  本環境で取得できない)。`sandbox-rs` や `sandlock-core` が Rope の MSRV 1.75 と
+  edition2024 回避方針を満たすかは **`cargo add` 実測が必須**。
+- **gVisor + nvproxy の実測オーバーヘッドは未確認**。§4e で GPU-CC については
+  数値を得たが、nvproxy の ioctl 転送コストは別問題。60 秒ジョブに乗るかは要測定。
+- これらは要旨・ブログレベルの情報であり、**一次ドキュメント (gvisor.dev の
+  GPU ガイド等) の精読は未実施**。
+
+---
+
 ## 5. 今回の調査が既存文書に要求する更新
 
 | 更新先 | 内容 | 根拠 |
@@ -789,6 +876,7 @@ A7 (「中断しても双方が損しない」) が、**A9 の行使経路では
 | `RESEARCH_IMPROVEMENTS.md` #2/#3 (TEE) | **CC オーバーヘッドの実測値を追加** (GPU 計算 0.998x = ほぼ無損失 / サービング全体 13-27% 損失 / 原因は CVM-GPU ブリッジ)。**Rope の短ジョブ特性は最悪ケース**であり A6 と A8 が構造的に緊張する点を明記 | §4e |
 | `RESEARCH_IMPROVEMENTS.md` #11 (cold start) | **「高優先」→「A8 の成立条件」に格上げ** — cold start 実測 40 秒超に対し 60 秒の約束は cold start を含められない。小型モデル常駐が前提条件 | §4f |
 | `FIRST_PRINCIPLES_AUDIT.md` §4 | **A8 の隠れた前提「ウォームな貸し手」を明文化**。供給側の実在 (Petals 800+ ノード / BOINC / 稼働率 40-65%) は裏付け済み | §4f |
+| `FIRST_PRINCIPLES_AUDIT.md` §4 | **`A9 ⊥ A8` を追加** — GPU 呼び出しに介在できるのは gVisor+nvproxy のみだが導入が要る (A8 を壊す)。pure Rust crate は追加インストール不要だが GPU レベルは無防備。Firecracker は GPU 非対応で失格 | §4j |
 | `FIRST_PRINCIPLES_AUDIT.md` §4 / `SURPLUS_AND_GAPS.md` | **🔴 `A9 → A7` の欠落した辺を追加** — `panic_stop` はセッションファイルを消すが ecash に触れず、escrow の自動返金は deadman (既定 60 分) 頼み。**貸し手が緊急停止しても借り手の資金は最大 60 分ロック**。A3+A9 実装時に顕在化 | §4i |
 | `FIRST_PRINCIPLES_AUDIT.md` §2/§4 追補 | A9 を §2 マッピング表 (△/✗、`panic_stop` は型のみ CLI 未到達) と依存グラフ (A3 と不可分 = 実行させることは隔離を要求) に反映。推奨順序を「A3 + A9 同スコープ」に更新。`CLAUDE.md` 改善案表も session.rs 行を「削除」→「A9 対応で保持」に訂正 | §4h |
 | `FIRST_PRINCIPLES_AUDIT.md` §1/§3/§4 | **🔴 A9 (貸し手の保護) を公理として追加し、`session.rs` 評価の誤りを訂正** (`panic_stop` は docker コンテナを kill する = A9 に直接対応。「どの公理にも対応しない」は公理集合が不完全だったための誤判定)。`A6 ⊥ A9` を依存グラフに追加 | §4h |
@@ -827,6 +915,8 @@ A7 (「中断しても双方が損しない」) が、**A9 の行使経路では
 - ACM AIBC 2025 (doi 10.1145/3775043.3775047) — Idle Consumer GPUs as a Complement to Enterprise Hardware (査読付き)
 - Spheron / Microsoft Community Hub / Cerebrium (2026) — GPU cold start の 4 フェーズ実測・keep-warm 経済
 - Petals (800+ ノード実証) / BOINC (500 万台前例) — P2P・ボランティア計算の実行可能性
+- gvisor.dev GPU ガイド / Northflank "GPU sandboxes" (2026) — **Firecracker は GPU パススルー非対応 (設計思想として除外)、gVisor は nvproxy で ioctl をユーザ空間捕捉**
+- `sandbox-rs` / `sandlock-core` / `hakoniwa` / `landlock` — pure Rust の隔離 crate 群 (Linux 5.13+、root 不要モードあり)
 - Northflank / Zylos Research (2026) — サンドボックス実務: Docker/runc は AI 生成コードに不十分、gVisor/MicroVM 必須、**信頼できないワークロードでは GPU アクセラレーション無効化を推奨**
 - CVE-2026-22164 — GPU カーネル権限昇格 (GPU デバイスノードにアクセスできる任意コードから到達可能)
 - OpenAI Child Protection Blueprint (2026-04) / CAIN 2026 研究トラック / STOP CSAM Act of 2025 — 生成 AI プロバイダの二次的責任と safe harbor

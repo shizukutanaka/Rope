@@ -175,6 +175,21 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
   併せて**「関係なし」と判定したペアも記録** (A1⊥A9 は Rope 固有でない一般論、
   A8→A9 は実装方法の問題、A2→A7 は escrow が責任判定を要求しない設計で回避済み) —
   こじつけを避けるため否定の記録にも価値がある
+  (14) **A9 のサンドボックス選定 — GPU 要件が選択肢をほぼ一つに絞ることが判明** —
+  §4h は「gVisor/Firecracker 級」と並列に書いていたが、**Rope が GPU を使わせる制約**を
+  掛けると答えが変わる: **Firecracker は GPU パススルーを意図的にサポートしない**
+  (VFIO/IOMMU/PCIe パススルーが最小 virtio デバイス集合に無い) ため**失格**。
+  **gVisor は nvproxy で NVIDIA の `ioctl` をユーザ空間で捕捉・転送**し、
+  **GPU 呼び出しに介在できる唯一の選択肢**。
+  一方 **pure Rust の隔離 crate 群** (`sandbox-rs` / `sandlock-core` / `hakoniwa` /
+  `landlock`) が存在し、**docker も root も不要**で現行 `panic_stop` の docker 前提を
+  置き換えうる — ただし**GPU 呼び出しには介在しない**ため `/dev/nvidia*` を通した瞬間に
+  GPU 攻撃面が残る。→ **新しい構造的緊張 `A9 ⊥ A8`**: 強い A9 (gVisor 導入) は
+  ゼロコンフィグを壊し、A8 を守る pure Rust 案は GPU レベルが無防備。
+  `A6 ⊥ A8` と同じ形・同じ根。加えて**どれも Linux 前提** (landlock は 5.13+) で、
+  macOS/Windows の貸し手は W4 と独立した第二の OS 制約に当たる。
+  **A3 実装前に選択の確定が必要** (後から差し替えると `session.rs` クラスター全体に波及)。
+  未確定事項も記録: 各 crate の MSRV/依存ツリー、nvproxy の実測オーバーヘッドは未確認
   **調査の限界も明記**: arxiv.org が egress proxy でブロックされるため論文は要旨のみ、
   crates.io 個別ページも取得不可 — 未確定事項を確定として扱わない
 - **`docs/FIRST_PRINCIPLES_AUDIT.md`** — First Principles Thinking による機能の

@@ -202,6 +202,29 @@ A9 (貸し手の保護) ── A3 (実行) と同時に成立が必要 (実行�
 > `Deposited | InProgress` フィルタと同形で書ける。これが `A9 ⊥ A7` の
 > 緊張を解く条件。
 
+> **2026-08-08 追記その6 — `A9 ⊥ A8` (サンドボックス選択を経由して)**
+> ([`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §4j):
+>
+> §4h は「gVisor/Firecracker 級の隔離」と並列に書いたが、**Rope が GPU を
+> 使わせる制約を掛けると答えが変わる**:
+> **Firecracker は GPU パススルーを意図的にサポートしない** (VFIO/IOMMU/PCIe
+> パススルーが最小 virtio デバイス集合に無い) → **失格**。
+> **gVisor は nvproxy で NVIDIA の `ioctl` をユーザ空間で捕捉・転送**し、
+> **GPU 呼び出しに介在できる唯一の選択肢**。
+>
+> 一方 pure Rust の隔離 crate (`sandbox-rs` / `sandlock-core` / `hakoniwa` /
+> `landlock`) は **docker も root も不要**で A8 と噛み合うが、
+> **GPU 呼び出しには介在しない** — `/dev/nvidia*` を通した瞬間に
+> §4h の GPU 攻撃面 (CVE-2026-22164、side channel) が残る。
+>
+> → **強い A9 (gVisor 導入が要る) と A8 (ゼロコンフィグ) が対立する**。
+> `A6 ⊥ A8` と同じ形・同じ根 (消費者マシンで設定ゼロで他人の計算を安全に走らせる
+> ことの困難さ)。加えて **gVisor も landlock/seccomp も Linux 前提**であり、
+> macOS/Windows の貸し手は W4 とは独立した第二の OS 制約に当たる。
+>
+> **A3 実装前にこの選択を確定させること** — 後から差し替えると
+> `panic_stop` を含む `session.rs` クラスター全体が影響を受ける。
+
 > 技術面の含意 (A3 着手時): 2026 年の実務コンセンサスは
 > 「Docker/runc は AI 生成コードに不十分、gVisor/MicroVM 必須」、さらに
 > 「**信頼できないワークロードでは GPU アクセラレーションを無効化すべき**」
