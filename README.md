@@ -70,16 +70,34 @@ rope earn             # 自分の GPU を貸し出す
 
 ## なぜ Rope か (8 競合との比較)
 
+> ⚠️ **表の読み方 (2026-08 訂正)**: 競合列は**出荷済みの機能**を指す。
+> Rope 列は **✅ = 実際に動く** / **🔶 = 型と状態機械はあるが未結線 (現時点では
+> 提供されていない)** を区別する。以前は全て ✅ だったが、これは
+> 実装済み競合と設計だけの自プロダクトを同じ記号で並べるもので、
+> 実態と食い違っていた。公理ごとの厳密な現状は
+> [`docs/FIRST_PRINCIPLES_AUDIT.md`](docs/FIRST_PRINCIPLES_AUDIT.md) §2 を参照。
+
 | | Rope | EXO | Petals | Akash | io.net | Vast.ai | RunPod | Ollama |
 |---|------|-----|--------|-------|--------|---------|--------|--------|
-| 他人 GPU | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| TEE プライバシー | ✅ | N/A | ❌ | △ | ❌ | ❌ | △ | N/A |
+| 他人 GPU | 🔶 | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| TEE プライバシー | 🔶 | N/A | ❌ | △ | ❌ | ❌ | △ | N/A |
 | 独自トークン不要 | ✅ | N/A | ✅ | ❌AKT | ❌IO | ✅ | ✅ | N/A |
-| ジョブ中断耐性 | ✅escrow | N/A | ❌ | △ | △ | ❌ | △ | N/A |
-| 1秒単位課金 | ✅ | N/A | N/A | ❌ | ❌ | ❌ | ❌ | N/A |
+| ジョブ中断耐性 | 🔶escrow | N/A | ❌ | △ | △ | ❌ | △ | N/A |
+| 1秒単位課金 | 🔶 | N/A | N/A | ❌ | ❌ | ❌ | ❌ | N/A |
 | ゼロコンフィグ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
 
-**Rope の wedge** = 他人 GPU + GPU TEE + ecash 少額決済の交点。
+**Rope の wedge (目標)** = 他人 GPU + GPU TEE + ecash 少額決済の交点。
+**現時点で実際に提供できているのは「独自トークン不要」と「ゼロコンフィグ」の 2 つ**
+— 他は設計済みだが未結線 (`FIRST_PRINCIPLES_AUDIT.md` §5)。
+
+**この分野は動いている (2026-08 調査)**: 上表の 8 競合以外にも
+Render/Dispersed.com・Aethir・Fluence・Nosana・iExec・Argentum AI 等が存在し、
+特に **Cocoon (Confidential Compute Open Network, TON 上)** は
+**GPU 提供者に「プライベート推論」の対価を払う**という **Rope とほぼ同じ wedge**
+を狙う新規参入。ただし **調査した限りどの競合も独自トークンを使う**
+(TON / NOS / AKT / IO) — **ecash や Lightning で決済する GPU マーケットは
+見つからなかった**ため、「独自トークン不要」は現時点でも**実質的な差別化**として
+成立している。詳細: [`docs/RESEARCH_UPDATE_2026-08.md`](docs/RESEARCH_UPDATE_2026-08.md) §4k。
 
 > **TEE プライバシーの前提**: 「プロンプトは相手に見えません」が成立するのは
 > **attestation 検証済みの TEE 対応 GPU (NVIDIA Hopper/Blackwell 以降)** に限ります。

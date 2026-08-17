@@ -860,6 +860,77 @@ Rope の供給プールは消費者マシン (macOS / Windows を含む) を想�
 
 ---
 
+## 4k. 関連ソフトウェアの再調査 — 自分の比較表が実態と食い違っていた
+
+「関連ソフトウェア」の観点で 2026 年時点のランドスケープを調べた結果、
+**新規競合の発見**と、より重い**自分の README の不正確さ**の 2 つが出た。
+
+### 🔴 README の競合比較表が、未実装の能力を実装済み競合と同じ ✅ で並べていた
+
+`README.md` の「なぜ Rope か (8 競合との比較)」表は Rope 列に
+**6 行中 5 行 ✅** を付けていた。第一原理監査 (§2) と突き合わせると:
+
+| 表の行 | 表の主張 | 監査の判定 |
+|---|---|---|
+| 他人 GPU | ✅ | **A1+A3 未達** (ソケットを開くコード無し、推論エンジンのバインディング無し) |
+| TEE プライバシー | ✅ | **A6 未達** (`build_evidence_signature` が `unverified-digest:` prefix の偽署名) |
+| 独自トークン不要 | ✅ | **真** (設計思想であり実装状態に依存しない) |
+| ジョブ中断耐性 | ✅escrow | **A7 未達** (CLI 未到達)。加えて §1.10 の `A9→A7` 欠落あり |
+| 1秒単位課金 | ✅ | **A5 未達** (CLI 未到達、BDHKE もプレースホルダ) |
+| ゼロコンフィグ | ✅ | **真** (A8、唯一実際に動く) |
+
+表の下には「どの GPU が CC 対応か」という注記はあったが、
+**✅ が未実装の能力を指していることの開示は無かった**。
+Petals や Ollama の**出荷済み機能**と、Rope の**設計だけの機能**を
+**同じ ✅ 記号で並べる**のは、`CLAUDE.md` 規範6 (正直さの文化 —
+「README が実態と食い違う変更はしない」) に照らして許容できない。
+
+**修正済み**: Rope 列に **✅ (実際に動く) / 🔶 (型と状態機械はあるが未結線)** の
+区別を導入し、表の直前に読み方の注記と監査へのリンクを追加。
+**現時点で実際に提供できているのは「独自トークン不要」と「ゼロコンフィグ」の 2 つだけ**
+であることを表の直下に明記した。
+
+これは監査 §5 が既に「README の 6 つの約束のうち他の 5 つは提供されていない」と
+書いていた内容だが、**README 本体の表には反映されていなかった** —
+文書間の不整合が、最も読まれる箇所 (製品のピッチ) に残っていた。
+
+### 新規競合: Cocoon — Rope とほぼ同じ wedge を狙う
+
+- **Cocoon** (Confidential Compute Open Network, **TON ブロックチェーン上**) —
+  **GPU 所有者に「プライベート AI 推論」を提供した対価を TON で支払う**。
+  Rope の wedge (他人 GPU + 秘匿 + 少額決済) と**ほぼ同一の狙い**であり、
+  README の 8 競合表に載っていない。
+- その他 2026 年時点で同分野に存在: **Render / Dispersed.com**
+  (2025-12 開始、600+ オープンウェイトモデル、H200/H100/MI300 を $1.75/compute-hour)、
+  **Aethir**, **Fluence**, **Nosana** (Solana 上、NOS 決済), **iExec**
+  (機密計算・フェデレーテッドラーニング), **Argentum AI**。
+- 既存 2 者の現況: **Petals は現役** (Llama-2 70B で最大 6 tok/s、
+  Falcon-180B で 4 tok/s、BLOOM-176B を実サーバ 14 台で 0.83 steps/s)。
+  **EXO は VC 資金**が入っており、この分野の歴史的パターン
+  (ホスト版の事業化 → OSS が付属物化 / あるいはピボットで OSS が孤児化) の
+  リスクを負う、との指摘がある。
+
+### ✅ 差別化の再確認: ecash/no-token は本物
+
+**調査した限り、どの競合も独自トークンで決済する** — TON (Cocoon) /
+NOS (Nosana) / AKT (Akash) / IO (io.net)。
+**ecash や Lightning で決済する GPU マーケットは見つからなかった。**
+
+→ Rope の「独自トークン不要」は、**表の中で唯一「実装状態に依存せず、かつ
+競合が誰も持っていない」差別化**。A5 (ecash) が結線されれば、
+これは主張ではなく実証になる。**第一原理で言えば、Rope が最初に
+証明すべき固有の価値はここ**かもしれない — A1/A3 は競合が既に持つ能力だが、
+no-token の少額決済は誰も出荷していない。
+
+### この調査の限界
+
+- 各競合の実装深度は**二次情報 (ブログ・まとめ記事) ベース**。
+  Cocoon の TEE がどの世代の GPU を要求するか、実際に稼働しているかは未確認。
+- 「ecash/Lightning の GPU マーケットが無い」は**検索で見つからなかった**という
+  否定であり、存在しない証明ではない。
+
+---
+
 ## 5. 今回の調査が既存文書に要求する更新
 
 | 更新先 | 内容 | 根拠 |
@@ -876,6 +947,7 @@ Rope の供給プールは消費者マシン (macOS / Windows を含む) を想�
 | `RESEARCH_IMPROVEMENTS.md` #2/#3 (TEE) | **CC オーバーヘッドの実測値を追加** (GPU 計算 0.998x = ほぼ無損失 / サービング全体 13-27% 損失 / 原因は CVM-GPU ブリッジ)。**Rope の短ジョブ特性は最悪ケース**であり A6 と A8 が構造的に緊張する点を明記 | §4e |
 | `RESEARCH_IMPROVEMENTS.md` #11 (cold start) | **「高優先」→「A8 の成立条件」に格上げ** — cold start 実測 40 秒超に対し 60 秒の約束は cold start を含められない。小型モデル常駐が前提条件 | §4f |
 | `FIRST_PRINCIPLES_AUDIT.md` §4 | **A8 の隠れた前提「ウォームな貸し手」を明文化**。供給側の実在 (Petals 800+ ノード / BOINC / 稼働率 40-65%) は裏付け済み | §4f |
+| `README.md` 競合比較表 | **🔴 訂正済** — Rope 列の ✅ 5 件のうち 4 件が未実装能力だった。✅ (動く) / 🔶 (設計のみ) を区別し、実際に提供できているのは「独自トークン不要」「ゼロコンフィグ」の 2 つだけと明記。新規競合 Cocoon も追記 | §4k |
 | `FIRST_PRINCIPLES_AUDIT.md` §4 | **`A9 ⊥ A8` を追加** — GPU 呼び出しに介在できるのは gVisor+nvproxy のみだが導入が要る (A8 を壊す)。pure Rust crate は追加インストール不要だが GPU レベルは無防備。Firecracker は GPU 非対応で失格 | §4j |
 | `FIRST_PRINCIPLES_AUDIT.md` §4 / `SURPLUS_AND_GAPS.md` | **🔴 `A9 → A7` の欠落した辺を追加** — `panic_stop` はセッションファイルを消すが ecash に触れず、escrow の自動返金は deadman (既定 60 分) 頼み。**貸し手が緊急停止しても借り手の資金は最大 60 分ロック**。A3+A9 実装時に顕在化 | §4i |
 | `FIRST_PRINCIPLES_AUDIT.md` §2/§4 追補 | A9 を §2 マッピング表 (△/✗、`panic_stop` は型のみ CLI 未到達) と依存グラフ (A3 と不可分 = 実行させることは隔離を要求) に反映。推奨順序を「A3 + A9 同スコープ」に更新。`CLAUDE.md` 改善案表も session.rs 行を「削除」→「A9 対応で保持」に訂正 | §4h |
@@ -915,6 +987,9 @@ Rope の供給プールは消費者マシン (macOS / Windows を含む) を想�
 - ACM AIBC 2025 (doi 10.1145/3775043.3775047) — Idle Consumer GPUs as a Complement to Enterprise Hardware (査読付き)
 - Spheron / Microsoft Community Hub / Cerebrium (2026) — GPU cold start の 4 フェーズ実測・keep-warm 経済
 - Petals (800+ ノード実証) / BOINC (500 万台前例) — P2P・ボランティア計算の実行可能性
+- Cocoon (Confidential Compute Open Network, TON 上) — GPU 所有者に**プライベート推論の対価**を払う、Rope とほぼ同一 wedge の新規競合
+- Render/Dispersed.com (2025-12) / Aethir / Fluence / Nosana / iExec / Argentum AI — 2026 時点の同分野プレイヤー
+- SharedLLM 比較記事 / petals.dev / EXO 各種 — Petals は現役 (Llama-2 70B で最大 6 tok/s)、EXO は VC 資金のリスク指摘あり
 - gvisor.dev GPU ガイド / Northflank "GPU sandboxes" (2026) — **Firecracker は GPU パススルー非対応 (設計思想として除外)、gVisor は nvproxy で ioctl をユーザ空間捕捉**
 - `sandbox-rs` / `sandlock-core` / `hakoniwa` / `landlock` — pure Rust の隔離 crate 群 (Linux 5.13+、root 不要モードあり)
 - Northflank / Zylos Research (2026) — サンドボックス実務: Docker/runc は AI 生成コードに不十分、gVisor/MicroVM 必須、**信頼できないワークロードでは GPU アクセラレーション無効化を推奨**
