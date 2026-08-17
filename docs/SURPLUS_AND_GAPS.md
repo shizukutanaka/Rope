@@ -217,6 +217,46 @@ against HEAD before trusting anything past `830d8c4`.
   CLI-unreachable `EcashManager` mutation API as §1.8 (§2.3) — no verb calls
   it against a real wallet.
 
+### 1.10 Emergency stop and escrow refund are not connected `[OPEN, latent; surfaces the moment A3+A9 are wired]`
+- Found by a systematic axiom-pair sweep (2026-08-08,
+  [`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §4i), asking what
+  *should* happen to the borrower's funds when the lender exercises their
+  emergency stop (A9). The borrower is not at fault, so the escrow should be
+  refunded immediately. It is not.
+- Three facts, each grep-verified:
+  - `panic_stop` (`session.rs:360-390`) does exactly three things: sets
+    `STOP_REQUESTED`, `docker kill`s Rope's containers, and calls
+    `clear_session_files()` (`session.rs:385`).
+  - `clear_session_files` (`session.rs:483-494`) deletes only `.json` files
+    under `config::session_dir()`. **The ecash state lives in
+    `~/.rope/ecash.json` and is untouched.**
+  - The only automatic refund path is `process_deadman`
+    (`ecash.rs:900-918`), gated on `e.deadman_at < now`, where `deadman_at`
+    is set at open time to now + `default_deadman_minutes` — **60 by
+    default** (`ecash.rs:341,366,677`).
+- **Consequence once wired**: the lender stops the job, and the borrower's
+  escrow stays locked for up to an hour. From the borrower's side: the job
+  died and the money is gone for 60 minutes. **A7 ("neither side loses on
+  interruption") does not hold along the A9 path.**
+- Why it was invisible until now: A7's refund was designed around *timeout*
+  — borrower abandonment or lender failure. **Deliberate lender-initiated
+  stop is an A9-shaped interruption, and A9 was missing from the axiom set
+  until 2026-08-08.** The gap in the axioms is mirrored by a gap in the code.
+- Harmless today: both `panic_stop` and the whole `EcashManager` mutation API
+  are CLI-unreachable (§2.3). **They get wired together during A3+A9, which
+  is when this surfaces.**
+- Fix direction (design input, not a patch to apply now):
+  - `panic_stop` should refund the escrows tied to the stopped session.
+    `job_id` exists on both sides (`Escrow.job_id`) and is the join key.
+  - **Naive immediate refund creates a new attack**: a lender could finish
+    the computation, then fire `panic_stop` to claw back payment while
+    keeping the result. So refund-on-stop must be **restricted to escrows
+    that are not yet complete** — the same `Deposited | InProgress` filter
+    `process_deadman` already uses; `EscrowState::Released` must be excluded.
+  - Readable as an `A9 ⊥ A7` tension: strengthening the lender's stop right
+    weakens the borrower's funds. The "don't refund completed work"
+    condition is what resolves it.
+
 ---
 
 ## 2. SURPLUS (過剰) — code/commitments beyond what's currently backed by use or roadmap
