@@ -13,6 +13,24 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Documented (careful-reading finding, no code change)
 
+- **`A9→A7` (§1.10) は単独では直せない — 順序制約を発見し、`CLAUDE.md` §3 の
+  「ブロッカー: なし」を訂正** — v1 実装順の項目 4 は「ビルド以外のブロッカー無し」と
+  記録していたが、grep で 2 点確認して誤りと判明:
+  - **良い方の発見**: 「完了済み escrow は返金しない」ガード (貸し手の
+    claw-back 攻撃対策) は `refund_escrow` (`ecash.rs:830`) に**既に存在する** —
+    `panic_stop` 側で再実装する必要はなく、修正は当初想定より小さい
+  - **悪い方の発見**: その `refund_escrow` こそ §1.8 の壊れた経路
+    (`total_sats` だけ加算し proof を復元しない、`ecash.rs:837`)。
+    `panic_stop` から呼ぶと **§1.8 が初めて CLI 動詞から到達可能になる** —
+    現状 §1.8 が無害なのは到達不能だから (§2.3) という前提を崩す
+  - さらに §1.8 は「proof を戻す」だけでは直せない: `lock_funds`
+    (`ecash.rs:716-753`) は locked proof を破棄し (doc comment に明記)、
+    `Escrow` (`ecash.rs:221-245`) に保持フィールドが無い。
+    → `Escrow` に `locked_proofs` を追加する (オフラインで完結、LAN 限定の v1 に
+    合う。`#[serde(default)]` 必須) か、実 mint swap (= 実装順の項目 2) が要る
+  - **結論: 項目 2 (A5/BDHKE + §1.8 修正) → 項目 4 (A9→A7) の順序は必須。**
+    `SURPLUS_AND_GAPS.md` §1.10 に file:line 付きで記録
+
 - **返金経路が `wallet.total_sats` を増やすが proof を復元しない潜在的不整合を
   発見・記録** — ecash のマネー経路を精読した結果、`close_stream`
   (`ecash.rs:1030`) / `refund_escrow` (`ecash.rs:837`) / `resolve_dispute`

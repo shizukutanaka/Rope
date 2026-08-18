@@ -306,6 +306,38 @@ proves: "rustfmt passes" ≠ "compiles".
     weakens the borrower's funds. The "don't refund completed work"
     condition is what resolves it.
 
+- **⚠️ Ordering constraint discovered 2026-08-18 — §1.10 cannot be fixed before
+  §1.8, and CLAUDE.md's "no blocker" tag on this item was wrong.**
+  Two grep-verified facts change the shape of the fix:
+  1. **The anti-clawback filter is already inside `refund_escrow`.**
+     `refund_escrow` (`ecash.rs:824-843`) opens with
+     `if !matches!(e.state, EscrowState::Deposited | EscrowState::InProgress)
+     { bail }` — the exact `Released`-excluding guard this entry asked for.
+     So `panic_stop` does **not** need to reimplement the filter: calling
+     `refund_escrow` per escrow of the stopped `job_id` inherits it, and a
+     completed-and-released escrow bails instead of being clawed back.
+     **The fix is smaller than this entry originally implied.**
+  2. **But `refund_escrow` is one of the §1.8 paths.** It does
+     `self.wallet.total_sats += e.amount_sats` (`ecash.rs:837`) and restores
+     **no proofs**. Wiring `panic_stop → refund_escrow` therefore does not
+     just fix A9→A7 — it **makes §1.8's broken invariant reachable from a
+     CLI verb for the first time**. Today §1.8 is harmless precisely because
+     nothing reaches it (§2.3); this change would end that.
+  - **And §1.8 cannot be fixed by "put the proofs back", because there are no
+    proofs to put back.** `lock_funds` (`ecash.rs:716-753`) consumes the
+    bearer tokens and re-issues only the *change* — its own doc comment says
+    「locked proof 自体は破棄」 — and `Escrow` (`ecash.rs:221-245`) has **no
+    field holding them**. So fixing §1.8 needs one of:
+    (a) add a `locked_proofs: Vec<Proof>` field to `Escrow` so a refund can
+        restore the exact tokens (works offline, no mint round-trip, and is
+        what a LAN-only v1 wants — but changes the persisted JSON shape, so
+        `#[serde(default)]` per 規範4), or
+    (b) a real mint swap re-issuing proofs on refund (needs real BDHKE, i.e.
+        v1 実装順の項目 2).
+  - **Therefore the v1 order is: item 2 (A5/BDHKE + the §1.8 fix) → item 4
+    (A9→A7).** Item 4 is *not* independently shippable, and it is *not*
+    "blocker: none". Corrected in `CLAUDE.md` §3.
+
 ### 1.11 A9 hard constraints for the A3 wiring — model format and URI fetching `[PARTLY SATISFIED BY DELETION 2026-08-18; the remaining half is still OPEN]`
 
 > **Update 2026-08-18 — the URI half is closed by deletion, not by code.**
