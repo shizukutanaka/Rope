@@ -1,5 +1,16 @@
 # 改善点の洗い出し — 同種ソフト + arXiv 調査
 
+> **⚠️ 2026-08-18 追記 — 本書の前提は古い。**
+> 本書は「Rope はエンドツーエンドでは動かないスケルトン」と評価しているが、
+> それは同日の実装 (A3 推論 / A1 発見・転送 / A5 決済) より前の姿である。
+> **現在は LAN 上でジョブが実際に相手のマシンへ渡り、実行され、
+> bearer token で支払われる。**
+> ただし**中身が 2 つ足りない**: BDHKE がプレースホルダ (実 mint では通らない)、
+> 転送が平文 (既定で無効)。どちらも新規 crate をこの環境に追加できないことが理由。
+> 最新の状態は [`V1_SCOPE.md`](V1_SCOPE.md) と
+> [`SURPLUS_AND_GAPS.md`](SURPLUS_AND_GAPS.md) を参照。
+> 本書は Tier 3 (履歴) であり、当時の評価としてそのまま残す。
+
 > 調査日: 2026-06-05 / 対象: Rope v0.2.1 (7 core + 1 net モジュール)
 > 目的: 同種ソフト (EXO / Petals / Akash / io.net / Vast.ai / RunPod / Gensyn /
 > Prime Intellect / Parallax 等) と arXiv 論文を参照し、Rope の改善点を列挙する。

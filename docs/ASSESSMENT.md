@@ -1,5 +1,16 @@
 # 現段階の評価 — 長所 / 短所 / 改善点
 
+> **⚠️ 2026-08-18 追記 — 本書の前提は古い。**
+> 本書は「Rope はエンドツーエンドでは動かないスケルトン」と評価しているが、
+> それは同日の実装 (A3 推論 / A1 発見・転送 / A5 決済) より前の姿である。
+> **現在は LAN 上でジョブが実際に相手のマシンへ渡り、実行され、
+> bearer token で支払われる。**
+> ただし**中身が 2 つ足りない**: BDHKE がプレースホルダ (実 mint では通らない)、
+> 転送が平文 (既定で無効)。どちらも新規 crate をこの環境に追加できないことが理由。
+> 最新の状態は [`V1_SCOPE.md`](V1_SCOPE.md) と
+> [`SURPLUS_AND_GAPS.md`](SURPLUS_AND_GAPS.md) を参照。
+> 本書は Tier 3 (履歴) であり、当時の評価としてそのまま残す。
+
 > 評価日: 2026-06-23 (初版) / 更新: 2026-07-10 (v0.2.13 + Unreleased 分反映) /
 > 対象: Rope (branch `claude/deepresearch-ultrathink-improve-wnYtn`)
 > 関連: [`RESEARCH_IMPROVEMENTS.md`](RESEARCH_IMPROVEMENTS.md)（優先度バックログ）,
