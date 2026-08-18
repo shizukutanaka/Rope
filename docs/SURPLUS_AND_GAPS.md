@@ -171,6 +171,46 @@ compiles", and emphatically ≠ "it works".** CI remains the shipping gate.
   integration code once §0 is resolved (dependency versions, AutoNAT/DCUtR
   config snippets).
 
+### 1.12 A5 is wired end-to-end, but the tokens are still placeholders and there is no price negotiation `[NEW 2026-08-18]`
+
+The differentiator named in `V1_SCOPE.md` §4 — **paying for compute without a
+token** — now actually happens over the wire:
+
+- `Message::Payment` carries bearer tokens (`WireProof`) after the job result.
+- Borrower: `main.rs::take_payment` selects proofs summing to *exactly* the
+  price, calls `EcashManager::spend_proofs`, and sends them.
+- Lender: `LocalPolicy::receive_payment` converts them back and calls
+  `EcashManager::receive_proofs`, which enforces double-spend rejection and
+  mint-trust checks, then persists the wallet.
+- Two tests run this for real over a loopback socket: one asserts 10 sats
+  arrive and are counted, one asserts an unpaid job is recorded as
+  `paid_sats = 0` rather than killing the lender.
+
+**Three honest limits, all of which matter:**
+
+1. **The tokens are not real Cashu tokens.** `build_proof` is still the
+   placeholder from §1.1 (blake3 reshaped into secp256k1-shaped bytes), so what
+   crosses the wire is structurally a bearer token but not cryptographically
+   one. **A real mint would reject it.** The plumbing is real; the money is not.
+   This is the same blocker as §1.1 (`k256` unavailable) and is the single
+   thing standing between v1 and a genuinely novel product.
+2. **There is no price negotiation.** No message proposes or accepts a price.
+   `main.rs::price_for` applies a fixed rule — **1 sat per output token, capped
+   by `--budget`** — and both sides simply assume it. `rope earn --rate`
+   (sats/second) is **not consulted**, which is an inconsistency to resolve when
+   a price message is added. Until then the lender takes whatever arrives.
+3. **Escrow is deliberately NOT used on this path, and the reason is worth
+   recording.** The escrow state machine protects the *borrower* against a
+   lender who takes payment and never delivers. But in the implemented flow the
+   borrower **receives the result first and pays afterwards**, so the exposure
+   is reversed: it is the *lender* who can be stiffed (test:
+   `an_unpaid_job_is_recorded_not_fatal`). Bolting the existing escrow onto this
+   flow would not fix that — it would only add ceremony. Fixing it properly
+   needs either payment-before-delivery (which exposes the borrower instead) or
+   incremental streaming payment per token, which is what
+   `StreamSession` was designed for and is the natural next step.
+   **Do not "wire escrow in" without deciding which side v1 protects.**
+
 ### 1.3 No proof-of-execution / verification engine `[PARTLY RESOLVED 2026-08-18 — execution now exists; verification still OPEN]`
 
 > **The blocking half is gone.** This entry's own conclusion was that

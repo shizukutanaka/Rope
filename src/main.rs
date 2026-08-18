@@ -630,6 +630,10 @@ fn try_offload_to_peer(
     }
 
     let job_id = uuid_like_id();
+    // A5: 支払い用のウォレット。空でも依頼はする (無償で受けてくれる貸し手も居る)。
+    let mut ecash = core::ecash::load_ecash().unwrap_or_default();
+    let mut paid_sats = 0u64;
+
     for peer in candidates {
         println!("📡 {} に推論を依頼中…", peer.endpoint);
         let mut stream = match std::net::TcpStream::connect_timeout(
@@ -642,6 +646,19 @@ fn try_offload_to_peer(
                 continue;
             }
         };
+        let mut pay = |ex: &rope::net::transport::Executed| {
+            let amount = price_for(ex, budget_sats);
+            match take_payment(&mut ecash, amount) {
+                Ok(proofs) => {
+                    paid_sats = amount;
+                    proofs
+                }
+                Err(e) => {
+                    println!("   ⚠️  支払えませんでした ({}) — 無償で受け取ります", e);
+                    Vec::new()
+                }
+            }
+        };
         match request_job(
             &mut stream,
             &me,
@@ -652,12 +669,87 @@ fn try_offload_to_peer(
             prompt,
             256,
             budget_sats,
+            &mut pay,
         ) {
-            Ok(ex) => return Ok(Some(ex)),
+            Ok(ex) => {
+                if paid_sats > 0 {
+                    // 支払いが成立した時だけウォレットを永続化する
+                    if let Err(e) = core::ecash::save_ecash(&ecash) {
+                        eprintln!("⚠️  ウォレットを保存できませんでした ({})", e);
+                    }
+                    println!("   💸 {} sats を支払いました", paid_sats);
+                }
+                return Ok(Some(ex));
+            }
             Err(e) => println!("   断られました ({})", e),
         }
     }
     Ok(None)
+}
+
+/// v1 の価格規則: **生成トークン 1 個あたり 1 sat**、予算で頭打ち。
+///
+/// ⚠️ **これは暫定の固定規則であって、価格交渉ではない。**
+/// ワイヤ形式に価格を提示するメッセージがまだ無いため、両者が同じ規則を
+/// 知っている前提で動いている。実際の市場価格を反映していない
+/// (`docs/V1_SCOPE.md` §4 の「1 ドル未満」の根拠は電力コストであって
+/// この規則ではない)。価格提示メッセージは v2 の課題。
+fn price_for(ex: &rope::net::transport::Executed, budget_sats: u64) -> u64 {
+    (ex.output_tokens as u64).min(budget_sats)
+}
+
+/// ウォレットから `amount` 分の bearer token を取り出してワイヤ形式へ変換する。
+///
+/// 端数を作らないよう、額面の合計がちょうど `amount` になる組み合わせだけを
+/// 使う。作れなければ支払わない (足りない額を勝手に払わない)。
+fn take_payment(
+    ecash: &mut core::ecash::EcashManager,
+    amount: u64,
+) -> Result<Vec<rope::net::wire::WireProof>> {
+    use rope::net::wire::WireProof;
+
+    if amount == 0 {
+        return Ok(Vec::new());
+    }
+    // ちょうど amount になるまで額面の大きい順に貪欲に取る
+    let (mint_id, ids, total) = {
+        let mut chosen: Option<(String, Vec<String>, u64)> = None;
+        for (mint_id, bucket) in &ecash.wallet.proofs_by_mint {
+            let mut sorted: Vec<_> = bucket.iter().collect();
+            sorted.sort_by(|a, b| b.amount_sats.cmp(&a.amount_sats));
+            let mut ids = Vec::new();
+            let mut total = 0u64;
+            for p in sorted {
+                if total >= amount {
+                    break;
+                }
+                if total + p.amount_sats <= amount {
+                    total += p.amount_sats;
+                    ids.push(p.id.clone());
+                }
+            }
+            if total == amount {
+                chosen = Some((mint_id.clone(), ids, total));
+                break;
+            }
+        }
+        chosen.ok_or_else(|| anyhow::anyhow!("{} sats ちょうどの proof を作れません", amount))?
+    };
+    let _ = total;
+
+    let spent = ecash.spend_proofs(&mint_id, &ids)?;
+    Ok(spent
+        .into_iter()
+        .map(|p| WireProof {
+            id: p.id,
+            amount_sats: p.amount_sats,
+            mint_id: p.mint_id,
+            keyset_id: p.keyset_id,
+            secret: p.secret,
+            c: p.c,
+            nullifier: p.nullifier,
+        })
+        .collect())
 }
 
 /// ジョブ ID。`uuid` crate を使わないのは、ここでは一意でありさえすればよく、
@@ -838,6 +930,9 @@ fn serve_jobs(max_minutes: u32) -> Result<()> {
 
     struct LocalPolicy {
         max_output_tokens: u32,
+        /// 受け取った proof を貯める。`serve_connection` は `&self` しか渡さないので
+        /// 内側可変性で受ける (1 接続ずつ直列なので競合はしない)。
+        earned: std::cell::RefCell<core::ecash::EcashManager>,
     }
     impl JobPolicy for LocalPolicy {
         fn accept(
@@ -853,6 +948,45 @@ fn serve_jobs(max_minutes: u32) -> Result<()> {
                 return Err("予算が 0 sats".to_string());
             }
             Ok(())
+        }
+
+        /// A5: 対価を受け取る。**bearer token を持っていること自体が支払い**なので、
+        /// 二重使用だけ弾いてウォレットへ入れる。
+        fn receive_payment(
+            &self,
+            _peer_pubkey: &str,
+            _job_id: &str,
+            proofs: &[rope::net::wire::WireProof],
+        ) -> Result<u64, String> {
+            if proofs.is_empty() {
+                return Ok(0);
+            }
+            let now = chrono::Utc::now();
+            let converted: Vec<core::ecash::Proof> = proofs
+                .iter()
+                .map(|w| core::ecash::Proof {
+                    id: w.id.clone(),
+                    amount_sats: w.amount_sats,
+                    mint_id: w.mint_id.clone(),
+                    keyset_id: w.keyset_id.clone(),
+                    secret: w.secret.clone(),
+                    c: w.c.clone(),
+                    signature: w.c.clone(),
+                    nullifier: w.nullifier.clone(),
+                    created_at: now,
+                })
+                .collect();
+            let mut wallet = self.earned.borrow_mut();
+            // 未知の mint の proof は receive_proofs が弾く。
+            // 初めて見る mint は「見たことがある」ところまでは登録しておく
+            // (信頼レベルは Unknown のままなので、それだけでは受け取れない)。
+            let credited = wallet
+                .receive_proofs(converted)
+                .map_err(|e| e.to_string())?;
+            if let Err(e) = core::ecash::save_ecash(&wallet) {
+                return Err(format!("ウォレット保存失敗: {}", e));
+            }
+            Ok(credited)
         }
 
         fn execute(
@@ -878,6 +1012,7 @@ fn serve_jobs(max_minutes: u32) -> Result<()> {
 
     let policy = LocalPolicy {
         max_output_tokens: 256,
+        earned: std::cell::RefCell::new(core::ecash::load_ecash().unwrap_or_default()),
     };
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(max_minutes as u64 * 60);
@@ -908,9 +1043,12 @@ fn serve_jobs(max_minutes: u32) -> Result<()> {
                     forward_passes: 0,
                 });
                 println!(
-                    "✅ {} からのジョブを実行 ({} tok 出力 / forward {} 回)",
-                    peer, ex.output_tokens, ex.forward_passes
+                    "✅ {} からのジョブを実行 ({} tok 出力 / forward {} 回 / {} sats 受領)",
+                    peer, ex.output_tokens, ex.forward_passes, job.paid_sats
                 );
+                if job.paid_sats == 0 {
+                    println!("   (対価は受け取れませんでした — 無償で計算しました)");
+                }
             }
             Ok(job) => println!("🚫 {} のジョブを謝絶 (job {})", peer, job.job_id),
             Err(e) => println!("⚠️  {} との通信に失敗 ({})", peer, e),

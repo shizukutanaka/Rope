@@ -125,12 +125,40 @@ pub enum Message {
     },
     /// 依頼を受けられない
     Reject { job_id: String, reason: String },
+    /// 対価の支払い — **bearer token をそのまま渡す** (A5)。
+    ///
+    /// これを受け取った側は `EcashManager::receive_proofs` に通す。
+    /// **トークンを持っていること自体が支払いの証明**なので、
+    /// 口座も台帳も相手の同意も要らない。
+    Payment {
+        job_id: String,
+        proofs: Vec<WireProof>,
+    },
 }
+
+/// 1 枚の bearer token をワイヤに載せた形。
+///
+/// `core::ecash::Proof` と同じ内容だが、**この層は `core` にも serde にも
+/// 依存しない** (依存ゼロを保つため)。変換は呼び出し側で行う。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WireProof {
+    pub id: String,
+    pub amount_sats: u64,
+    pub mint_id: String,
+    pub keyset_id: String,
+    pub secret: String,
+    pub c: String,
+    pub nullifier: String,
+}
+
+/// 1 回の支払いに載せられる proof の枚数上限 (A9: 相手が無限に送ってこない)。
+pub const MAX_PROOFS: usize = 256;
 
 const KIND_HELLO: u8 = 1;
 const KIND_JOB_REQUEST: u8 = 2;
 const KIND_JOB_RESULT: u8 = 3;
 const KIND_REJECT: u8 = 4;
+const KIND_PAYMENT: u8 = 5;
 
 impl Message {
     fn kind(&self) -> u8 {
@@ -139,6 +167,7 @@ impl Message {
             Message::JobRequest { .. } => KIND_JOB_REQUEST,
             Message::JobResult { .. } => KIND_JOB_RESULT,
             Message::Reject { .. } => KIND_REJECT,
+            Message::Payment { .. } => KIND_PAYMENT,
         }
     }
 
@@ -184,6 +213,19 @@ impl Message {
                 put_str(&mut p, job_id);
                 put_str(&mut p, reason);
             }
+            Message::Payment { job_id, proofs } => {
+                put_str(&mut p, job_id);
+                p.extend_from_slice(&(proofs.len() as u32).to_be_bytes());
+                for pr in proofs {
+                    put_str(&mut p, &pr.id);
+                    p.extend_from_slice(&pr.amount_sats.to_be_bytes());
+                    put_str(&mut p, &pr.mint_id);
+                    put_str(&mut p, &pr.keyset_id);
+                    put_str(&mut p, &pr.secret);
+                    put_str(&mut p, &pr.c);
+                    put_str(&mut p, &pr.nullifier);
+                }
+            }
         }
         p
     }
@@ -214,6 +256,30 @@ impl Message {
                 job_id: c.str()?,
                 reason: c.str()?,
             },
+            KIND_PAYMENT => {
+                let job_id = c.str()?;
+                let n = c.u32()? as usize;
+                // 枚数を信じて確保しない — 上限を超えていればここで落とす
+                if n > MAX_PROOFS {
+                    return Err(WireError::TooLarge {
+                        len: n,
+                        max: MAX_PROOFS,
+                    });
+                }
+                let mut proofs = Vec::with_capacity(n);
+                for _ in 0..n {
+                    proofs.push(WireProof {
+                        id: c.str()?,
+                        amount_sats: c.u64()?,
+                        mint_id: c.str()?,
+                        keyset_id: c.str()?,
+                        secret: c.str()?,
+                        c: c.str()?,
+                        nullifier: c.str()?,
+                    });
+                }
+                Message::Payment { job_id, proofs }
+            }
             other => return Err(WireError::UnknownKind(other)),
         };
         // 余分なバイトを黙って捨てない — 曖昧なパースは攻撃面になる
@@ -470,7 +536,7 @@ mod tests {
     use super::*;
 
     /// 決定論的な偽署名器。**暗号ではない** — プロトコル論理を試すためだけのもの。
-    struct FakeSig(u8);
+    pub(super) struct FakeSig(pub u8);
     impl FrameSigner for FakeSig {
         fn sign(&self, msg: &[u8]) -> Vec<u8> {
             let mut acc = [self.0; 8];
@@ -701,5 +767,89 @@ mod tests {
         f.extend_from_slice(&payload);
         f.extend_from_slice(&sig);
         assert_eq!(Message::decode(&f, &k), Err(WireError::UnknownKind(77)));
+    }
+}
+
+#[cfg(test)]
+mod payment_tests {
+    use super::tests::FakeSig;
+    use super::*;
+
+    fn proof(n: u64) -> WireProof {
+        WireProof {
+            id: format!("p{}", n),
+            amount_sats: n,
+            mint_id: "mint1".into(),
+            keyset_id: "ks".into(),
+            secret: "s3cr3t".into(),
+            c: "0233".into(),
+            nullifier: format!("null{}", n),
+        }
+    }
+
+    #[test]
+    fn payment_roundtrips_with_many_proofs() {
+        let k = FakeSig(21);
+        let m = Message::Payment {
+            job_id: "job-9".into(),
+            proofs: (0..64).map(proof).collect(),
+        };
+        let f = m.encode(&k).unwrap();
+        assert_eq!(Message::decode(&f, &k).unwrap(), m);
+    }
+
+    #[test]
+    fn empty_payment_roundtrips() {
+        let k = FakeSig(1);
+        let m = Message::Payment {
+            job_id: "j".into(),
+            proofs: vec![],
+        };
+        let f = m.encode(&k).unwrap();
+        assert_eq!(Message::decode(&f, &k).unwrap(), m);
+    }
+
+    /// 「proof が 40 億枚ある」と主張されても確保しない。
+    #[test]
+    fn absurd_proof_count_is_rejected_before_allocating() {
+        let k = FakeSig(3);
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&1u32.to_be_bytes());
+        payload.push(b'j');
+        payload.extend_from_slice(&u32::MAX.to_be_bytes()); // 枚数
+        let mut region = vec![VERSION, 5u8];
+        region.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        region.extend_from_slice(&payload);
+        let sig = k.sign(&region);
+        let mut f = Vec::new();
+        f.extend_from_slice(&MAGIC);
+        f.push(VERSION);
+        f.push(5);
+        f.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        f.push(sig.len() as u8);
+        f.extend_from_slice(&payload);
+        f.extend_from_slice(&sig);
+        match Message::decode(&f, &k) {
+            Err(WireError::TooLarge { max, .. }) => assert_eq!(max, MAX_PROOFS),
+            other => panic!("枚数上限で弾くべき: {:?}", other),
+        }
+    }
+
+    /// 支払いの 1 バイトでも書き換われば検出される (金額のすり替え防止)。
+    #[test]
+    fn tampering_with_a_payment_is_detected() {
+        let k = FakeSig(7);
+        let m = Message::Payment {
+            job_id: "j".into(),
+            proofs: vec![proof(64)],
+        };
+        let f = m.encode(&k).unwrap();
+        for i in 0..f.len() {
+            let mut bad = f.clone();
+            bad[i] ^= 0xFF;
+            if let Ok(got) = Message::decode(&bad, &k) {
+                assert_ne!(got, m, "支払いの改竄が素通りした (byte {})", i);
+            }
+        }
     }
 }

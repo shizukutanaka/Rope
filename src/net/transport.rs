@@ -25,11 +25,18 @@ use std::time::Duration;
 
 use super::wire::{
     read_frame, read_frame_bytes, verify_hello, write_frame, FrameSigner, FrameVerifier, Message,
-    WireError,
+    WireError, WireProof,
 };
 
 /// 接続・読み書きのタイムアウト (A9: 相手が黙り込んでも貸し手が固まらない)。
 pub const IO_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 支払いを待つ時間。**本体より短くする。**
+///
+/// 計算は既に終わっているので、ここで長く待つのは「払う気の無い借り手が
+/// 貸し手を 30 秒縛れる」だけの意味しか持たない (A9)。払わない相手は
+/// 早く切って次の接続を受ける方がよい。
+pub const PAYMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 pub enum TransportError {
@@ -117,6 +124,20 @@ pub trait JobPolicy {
         prompt: &str,
         max_output_tokens: u32,
     ) -> Result<Executed, String>;
+
+    /// 支払いを受け取る (A5)。返り値は受け入れた sats。
+    ///
+    /// **実行の後に呼ばれる。** bearer token は持っていること自体が支払いなので、
+    /// 受け取り側は二重使用の記録だけ確認すればよい。
+    /// 既定は「受け取らない」— 実装しなければ無償で貸すことになる。
+    fn receive_payment(
+        &self,
+        _peer_pubkey: &str,
+        _job_id: &str,
+        _proofs: &[WireProof],
+    ) -> Result<u64, String> {
+        Ok(0)
+    }
 }
 
 /// 1 件処理した記録 (貸し手側の戻り値)。
@@ -128,6 +149,8 @@ pub struct ServedJob {
     /// 受けて実行したか (false = Reject を返した)
     pub accepted: bool,
     pub executed: Option<Executed>,
+    /// 受け取れた対価 (sats)。0 なら**無償で計算した**ということ
+    pub paid_sats: u64,
 }
 
 /// 貸し手: 1 接続を最後まで処理する。
@@ -205,12 +228,26 @@ pub fn serve_connection(
                 },
                 signer,
             )?;
+            // 支払いを待つ。**来なくてもエラーにはしない** — 既に計算は
+            // 終わっており、借り手が落ちただけかもしれない。取り損ねた事実を
+            // `paid_sats = 0` として返し、判断は呼び出し元に委ねる。
+            let _ = stream.set_read_timeout(Some(PAYMENT_TIMEOUT));
+            let paid_sats = match read_frame(stream, verifier.as_ref()) {
+                Ok(Message::Payment {
+                    job_id: pid,
+                    proofs,
+                }) if pid == job_id => policy
+                    .receive_payment(&peer_pubkey, &job_id, &proofs)
+                    .unwrap_or(0),
+                _ => 0,
+            };
             Ok(ServedJob {
                 peer_node_id,
                 peer_pubkey,
                 job_id,
                 accepted: true,
                 executed: Some(ex),
+                paid_sats,
             })
         }
         Err(reason) => {
@@ -228,6 +265,7 @@ pub fn serve_connection(
                 job_id,
                 accepted: false,
                 executed: None,
+                paid_sats: 0,
             })
         }
     }
@@ -245,6 +283,7 @@ pub fn request_job(
     prompt: &str,
     max_output_tokens: u32,
     budget_sats: u64,
+    pay: &mut dyn FnMut(&Executed) -> Vec<WireProof>,
 ) -> Result<Executed, TransportError> {
     if !plaintext_allowed() {
         return Err(TransportError::PlaintextNotAllowed);
@@ -295,12 +334,27 @@ pub fn request_job(
             if got != job_id {
                 return Err(TransportError::Protocol("job_id が一致しない"));
             }
-            Ok(Executed {
+            let ex = Executed {
                 text,
                 prompt_tokens,
                 output_tokens,
                 forward_passes,
-            })
+            };
+            // A5: 結果を受け取ってから払う。**払えなくても結果は返す** —
+            // 既に受け取ったものを握り潰しても誰も得をしない。未払いは
+            // 貸し手側で `paid_sats = 0` として観測される。
+            let proofs = pay(&ex);
+            if !proofs.is_empty() {
+                let _ = write_frame(
+                    stream,
+                    &Message::Payment {
+                        job_id: job_id.to_string(),
+                        proofs,
+                    },
+                    signer,
+                );
+            }
+            Ok(ex)
         }
         Message::Reject { reason, .. } => Err(TransportError::Rejected(reason)),
         _ => Err(TransportError::Protocol("JobResult か Reject を期待した")),
@@ -314,7 +368,7 @@ mod tests {
     use super::*;
     use std::net::{TcpListener, TcpStream};
 
-    struct FakeSig(u8);
+    pub(super) struct FakeSig(pub u8);
     impl FrameSigner for FakeSig {
         fn sign(&self, msg: &[u8]) -> Vec<u8> {
             let mut acc = [self.0; 8];
@@ -330,7 +384,7 @@ mod tests {
         }
     }
     /// 鍵 hex "0N" → FakeSig(N) を返す TOFU 相当のルックアップ
-    fn tofu(pk: &str) -> Option<Box<dyn FrameVerifier>> {
+    pub(super) fn tofu(pk: &str) -> Option<Box<dyn FrameVerifier>> {
         u8::from_str_radix(pk, 16)
             .ok()
             .map(|n| Box::new(FakeSig(n)) as Box<dyn FrameVerifier>)
@@ -340,9 +394,9 @@ mod tests {
     }
 
     /// 本物の推論エンジンを積んだ貸し手の方針。
-    struct RealPolicy {
-        engine: CpuEngine,
-        max_prompt: usize,
+    pub(super) struct RealPolicy {
+        pub engine: CpuEngine,
+        pub max_prompt: usize,
     }
     impl JobPolicy for RealPolicy {
         fn accept(&self, _pk: &str, model: &str, prompt: &str, budget: u64) -> Result<(), String> {
@@ -376,7 +430,7 @@ mod tests {
     }
 
     /// 「b」を出し続ける小さな本物のモデル (inference.rs のテストと同じ構成)
-    fn engine() -> CpuEngine {
+    pub(super) fn engine() -> CpuEngine {
         let c = Config {
             dim: 4,
             hidden_dim: 4,
@@ -466,7 +520,7 @@ mod tests {
         out
     }
 
-    fn with_plaintext<T>(f: impl FnOnce() -> T) -> T {
+    pub(super) fn with_plaintext<T>(f: impl FnOnce() -> T) -> T {
         std::env::set_var("ROPE_ALLOW_PLAINTEXT", "1");
         let r = f();
         std::env::remove_var("ROPE_ALLOW_PLAINTEXT");
@@ -509,6 +563,7 @@ mod tests {
                 "ab",
                 4,
                 100,
+                &mut |_| vec![],
             )
             .unwrap();
 
@@ -563,6 +618,7 @@ mod tests {
                 "ab",
                 4,
                 100,
+                &mut |_| vec![],
             );
             let r = server.join().unwrap();
             assert!(r.is_err(), "未知の鍵は受け付けない");
@@ -603,6 +659,7 @@ mod tests {
                 "ab",
                 4,
                 100,
+                &mut |_| vec![],
             )
             .unwrap_err();
             match err {
@@ -630,10 +687,175 @@ mod tests {
             node_id: "b".into(),
             pubkey: "0b".into(),
         };
-        let r = request_job(&mut c, &me, &FakeSig(1), &tofu, "j", "demo", "x", 1, 1);
+        let r = request_job(
+            &mut c,
+            &me,
+            &FakeSig(1),
+            &tofu,
+            "j",
+            "demo",
+            "x",
+            1,
+            1,
+            &mut |_| vec![],
+        );
         assert!(
             matches!(r, Err(TransportError::PlaintextNotAllowed)),
             "既定で拒否する"
         );
+    }
+}
+
+#[cfg(test)]
+mod payment_tests {
+    use super::tests::*;
+    use super::*;
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// 受け取った sats を記録するだけの方針。
+    struct PayingPolicy {
+        inner: RealPolicy,
+        received: &'static AtomicU64,
+    }
+    impl JobPolicy for PayingPolicy {
+        fn accept(&self, pk: &str, m: &str, p: &str, b: u64) -> Result<(), String> {
+            self.inner.accept(pk, m, p, b)
+        }
+        fn execute(&self, m: &str, p: &str, n: u32) -> Result<Executed, String> {
+            self.inner.execute(m, p, n)
+        }
+        fn receive_payment(
+            &self,
+            _pk: &str,
+            _job: &str,
+            proofs: &[WireProof],
+        ) -> Result<u64, String> {
+            let total: u64 = proofs.iter().map(|p| p.amount_sats).sum();
+            self.received.store(total, Ordering::SeqCst);
+            Ok(total)
+        }
+    }
+
+    static RECEIVED: AtomicU64 = AtomicU64::new(0);
+
+    /// **A5: 計算の対価が実際に相手へ渡る。**
+    /// 借り手は結果を受け取ってから bearer token を送り、貸し手はそれを数える。
+    #[test]
+    fn payment_actually_crosses_the_wire_after_the_job() {
+        with_plaintext(|| {
+            RECEIVED.store(0, Ordering::SeqCst);
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            let server = std::thread::spawn(move || {
+                std::env::set_var("ROPE_ALLOW_PLAINTEXT", "1");
+                let (mut s, _) = listener.accept().unwrap();
+                let me = NodeIdentity {
+                    node_id: "lender".into(),
+                    pubkey: "0a".into(),
+                };
+                let policy = PayingPolicy {
+                    inner: RealPolicy {
+                        engine: engine(),
+                        max_prompt: 4096,
+                    },
+                    received: &RECEIVED,
+                };
+                serve_connection(&mut s, &me, &FakeSig(0x0a), &tofu, &policy).unwrap()
+            });
+
+            let mut c = TcpStream::connect(addr).unwrap();
+            let me = NodeIdentity {
+                node_id: "borrower".into(),
+                pubkey: "0b".into(),
+            };
+            let mut paid = |_ex: &Executed| {
+                vec![
+                    WireProof {
+                        id: "p1".into(),
+                        amount_sats: 8,
+                        mint_id: "mint1".into(),
+                        keyset_id: "ks".into(),
+                        secret: "s".into(),
+                        c: "02".into(),
+                        nullifier: "n1".into(),
+                    },
+                    WireProof {
+                        id: "p2".into(),
+                        amount_sats: 2,
+                        mint_id: "mint1".into(),
+                        keyset_id: "ks".into(),
+                        secret: "s2".into(),
+                        c: "03".into(),
+                        nullifier: "n2".into(),
+                    },
+                ]
+            };
+            let out = request_job(
+                &mut c,
+                &me,
+                &FakeSig(0x0b),
+                &tofu,
+                "job-p",
+                "demo",
+                "ab",
+                4,
+                100,
+                &mut paid,
+            )
+            .unwrap();
+
+            let served = server.join().unwrap();
+            assert_eq!(out.text, "bbbb");
+            assert_eq!(served.paid_sats, 10, "10 sats を受け取った: {:?}", served);
+            assert_eq!(RECEIVED.load(Ordering::SeqCst), 10);
+        });
+    }
+
+    /// 払わない借り手でも、貸し手は落ちずに `paid_sats = 0` として記録する。
+    #[test]
+    fn an_unpaid_job_is_recorded_not_fatal() {
+        with_plaintext(|| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                std::env::set_var("ROPE_ALLOW_PLAINTEXT", "1");
+                let (mut s, _) = listener.accept().unwrap();
+                let me = NodeIdentity {
+                    node_id: "lender".into(),
+                    pubkey: "0a".into(),
+                };
+                let policy = RealPolicy {
+                    engine: engine(),
+                    max_prompt: 4096,
+                };
+                serve_connection(&mut s, &me, &FakeSig(0x0a), &tofu, &policy).unwrap()
+            });
+            {
+                let mut c = TcpStream::connect(addr).unwrap();
+                let me = NodeIdentity {
+                    node_id: "borrower".into(),
+                    pubkey: "0b".into(),
+                };
+                let _ = request_job(
+                    &mut c,
+                    &me,
+                    &FakeSig(0x0b),
+                    &tofu,
+                    "j",
+                    "demo",
+                    "ab",
+                    4,
+                    100,
+                    &mut |_| vec![],
+                )
+                .unwrap();
+                // ここで c が drop され、貸し手側の読み出しは EOF で即座に返る
+            }
+            let served = server.join().unwrap();
+            assert!(served.accepted, "計算はした");
+            assert_eq!(served.paid_sats, 0, "対価は取れなかったと記録する");
+        });
     }
 }
