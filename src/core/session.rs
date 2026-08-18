@@ -368,6 +368,34 @@ impl SessionManager {
 /// 同様に呼び出し元ゼロ。「呼び出し元ゼロ」だけで削除すべきでない理由は
 /// `docs/SURPLUS_AND_GAPS.md` §2.4 / `docs/REACHABILITY_AUDIT.md` 参照 —
 /// 削除するか signal handler に配線するかは製品判断待ち。
+/// 緊急停止を要求するための番兵ファイル (`~/.rope/STOP`)。
+///
+/// **なぜファイルなのか**: Rust の `std` にはシグナルハンドラが無く、
+/// `signal_hook` 等の crate はこの環境に追加できない。`unsafe` で `libc::signal`
+/// を叩くのは `unsafe_code = "deny"` に反する (規範5)。
+/// 一方、貸出ループは**別の端末から止められる必要がある**。
+///
+/// ファイル 1 個で足りる:
+/// ```sh
+/// touch ~/.rope/STOP     # 貸出を安全に止める
+/// ```
+/// 貸出ループはこれを定期的に見て、見つけたら [`panic_stop`] を呼ぶ。
+/// **シグナルより粗いが、シグナルが使えない環境で「引き金が無い」よりは良い。**
+/// `snow` や `signal-hook` が入るようになったら差し替えること。
+pub fn stop_sentinel_path() -> std::path::PathBuf {
+    config::config_dir().join("STOP")
+}
+
+/// 番兵ファイルが置かれているか。
+pub fn stop_sentinel_present() -> bool {
+    stop_sentinel_path().exists()
+}
+
+/// 番兵ファイルを消す (停止処理を終えた後の後始末)。
+pub fn clear_stop_sentinel() {
+    let _ = fs::remove_file(stop_sentinel_path());
+}
+
 pub fn panic_stop() -> Result<()> {
     tracing::warn!("PANIC STOP triggered");
     // 真っ先に停止フラグ。後続が失敗してもポーリング側は止まれる。
@@ -646,6 +674,42 @@ pub fn list_sessions() -> Result<Vec<Session>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 番兵ファイルのパスは設定ディレクトリの下に閉じている。
+    #[test]
+    fn stop_sentinel_lives_under_the_config_dir() {
+        assert!(stop_sentinel_path().starts_with(config::config_dir()));
+        assert_eq!(
+            stop_sentinel_path().file_name().and_then(|s| s.to_str()),
+            Some("STOP")
+        );
+    }
+
+    /// `job_id` は既定で `None` (待機中のセッションはジョブを持たない)。
+    #[test]
+    fn a_new_session_has_no_job() {
+        let s = Session::new(Limits::default());
+        assert!(s.job_id.is_none());
+    }
+
+    /// 旧形式 (`job_id` を持たない JSON) が読める — 規範4 の後方互換。
+    #[test]
+    fn sessions_written_before_job_id_still_load() {
+        let legacy = r#"{
+            "id": "s1",
+            "state": "waiting",
+            "peer_id": null,
+            "started_at": null,
+            "limits": {"max_time_minutes": 60, "max_vram": 8192, "max_gpu_util": 80},
+            "verify_code": null,
+            "capability": null,
+            "container_id": null,
+            "monitor_pid": null
+        }"#;
+        let s: Session = serde_json::from_str(legacy).expect("旧形式が読めること");
+        assert_eq!(s.id, "s1");
+        assert!(s.job_id.is_none(), "欠けているフィールドは None になる");
+    }
 
     #[test]
     fn test_session_state_transition() {

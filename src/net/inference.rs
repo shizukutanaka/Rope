@@ -197,8 +197,20 @@ pub struct Weights {
     pub w2: Vec<f32>,
     pub w3: Vec<f32>,
     pub rms_final: Vec<f32>,
-    /// 出力層。共有時は token_embedding のコピー。
-    pub wcls: Vec<f32>,
+    /// 出力層の重み。**共有時は `None`** — `token_embedding` をそのまま使う。
+    ///
+    /// 以前はここに `token_embedding.clone()` を入れていたが、共有は
+    /// llama2 系では**普通の構成**であり、vocab 32000 × dim 4096 の
+    /// モデルでは **524MB を無意味に二重確保**していた (貸し手のメモリを
+    /// 倍食う = A9 の問題でもある)。アクセスは [`Weights::classifier`] 経由。
+    pub wcls: Option<Vec<f32>>,
+}
+
+impl Weights {
+    /// 出力層の重み。共有構成なら埋め込み表をそのまま返す。
+    pub fn classifier(&self) -> &[f32] {
+        self.wcls.as_deref().unwrap_or(&self.token_embedding)
+    }
 }
 
 /// ロード済みモデル。
@@ -364,10 +376,11 @@ fn slice_weights(c: &Config, f: &[f32]) -> Weights {
     let rms_final = take(dim);
     let _skip_real = take(seq * head_size / 2);
     let _skip_imag = take(seq * head_size / 2);
+    // 共有なら複製しない (None のまま token_embedding を使う)
     let wcls = if c.shared_classifier {
-        token_embedding.clone()
+        None
     } else {
-        take(vocab * dim)
+        Some(take(vocab * dim))
     };
 
     Weights {
@@ -626,12 +639,13 @@ impl Model {
             }
         }
 
-        let x_final = state.x.clone();
-        rmsnorm(&mut state.x, &x_final, &w.rms_final);
+        // 以前は `state.x.clone()` を経由していた — 1 トークンごとに dim 個の
+        // 確保が走る。作業用の `xb` へ書けば複製は要らない。
+        rmsnorm(&mut state.xb, &state.x, &w.rms_final);
         matmul(
             &mut state.logits,
-            &state.x,
-            &w.wcls,
+            &state.xb,
+            w.classifier(),
             dim,
             c.vocab_size as usize,
         );
@@ -1717,5 +1731,48 @@ mod disk_roundtrip_tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod weight_sharing_tests {
+    use super::tests::{build_checkpoint, tiny_config};
+    use super::*;
+
+    /// 共有構成では出力層を**複製しない**。
+    /// (7B 級では複製が 524MB になる — 貸し手のメモリを倍食う)
+    #[test]
+    fn shared_classifier_is_not_duplicated() {
+        let c = tiny_config(true);
+        let bytes = build_checkpoint(c, |name, n| match name {
+            "rms_att" | "rms_ffn" | "rms_final" => vec![1.0; n],
+            _ => vec![0.5; n],
+        });
+        let m = Model::from_bytes(&bytes, CheckpointLimits::default()).unwrap();
+        assert!(m.config.shared_classifier);
+        assert!(m.weights.wcls.is_none(), "共有時は複製を持たない");
+        assert_eq!(
+            m.weights.classifier(),
+            m.weights.token_embedding.as_slice(),
+            "共有時は埋め込み表そのものを使う"
+        );
+    }
+
+    /// 非共有構成では別の重みを使う (取り違えていないこと)。
+    #[test]
+    fn unshared_classifier_uses_its_own_weights() {
+        let c = tiny_config(false);
+        let bytes = build_checkpoint(c, |name, n| match name {
+            "rms_att" | "rms_ffn" | "rms_final" => vec![1.0; n],
+            "emb" => vec![1.0; n],
+            "wcls" => vec![7.0; n],
+            _ => vec![0.0; n],
+        });
+        let m = Model::from_bytes(&bytes, CheckpointLimits::default()).unwrap();
+        assert!(m.weights.wcls.is_some());
+        assert!(
+            m.weights.classifier().iter().all(|v| *v == 7.0),
+            "出力層は埋め込みではなく wcls"
+        );
     }
 }

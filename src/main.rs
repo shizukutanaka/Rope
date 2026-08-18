@@ -1033,18 +1033,47 @@ fn serve_jobs(max_minutes: u32, session: core::session::Session) -> Result<()> {
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(max_minutes as u64 * 60);
 
-    for incoming in listener.incoming() {
+    // accept をブロックさせない。ブロックすると、**接続が来るまで停止要求に
+    // 気づけない** — 緊急停止としては使い物にならない。
+    listener.set_nonblocking(true)?;
+    println!(
+        "   緊急停止: 別の端末で `touch {}`",
+        core::session::stop_sentinel_path().display()
+    );
+    println!();
+
+    loop {
         if std::time::Instant::now() >= deadline {
             println!("⏱  最大稼働時間に達しました。");
             break;
         }
-        let mut stream = match incoming {
-            Ok(s) => s,
+        // A9: 緊急停止。未完了 escrow の返金まで `panic_stop` が面倒を見る (A9→A7)。
+        if core::session::stop_sentinel_present() || core::session::is_stop_requested() {
+            println!("🛑 緊急停止が要求されました。");
+            match core::session::panic_stop() {
+                Ok(()) => println!("   停止しました (未完了の escrow は返金済み)。"),
+                Err(e) => eprintln!("   停止処理でエラー ({}) — 貸出は終了します", e),
+            }
+            core::session::clear_stop_sentinel();
+            core::session::reset_stop_flag();
+            break;
+        }
+
+        let mut stream = match listener.accept() {
+            Ok((s, _)) => s,
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // 接続が無い間も停止要求を見に戻る
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                continue;
+            }
             Err(e) => {
                 eprintln!("⚠️  接続を受けられませんでした ({})", e);
                 continue;
             }
         };
+        // accept したソケットは nonblocking を引き継ぐ環境がある。
+        // 以降の読み書きはタイムアウト付きのブロッキングで扱う。
+        stream.set_nonblocking(false)?;
         let peer = stream
             .peer_addr()
             .map(|a| a.to_string())

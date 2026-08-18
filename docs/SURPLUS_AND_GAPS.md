@@ -171,6 +171,31 @@ compiles", and emphatically ≠ "it works".** CI remains the shipping gate.
   integration code once §0 is resolved (dependency versions, AutoNAT/DCUtR
   config snippets).
 
+### 1.13 Two resource bugs in the inference path, found by re-reading what shipped `[FIXED 2026-08-18]`
+
+Found by applying ③/④ to `net/inference.rs` **after** it worked — which is the
+order `V1_SCOPE.md` §5 insists on (do not optimize what does not exist yet).
+
+1. **The shared classifier was duplicated.** `slice_weights` did
+   `wcls: token_embedding.clone()` whenever `shared_classifier` was set — which
+   is the *normal* configuration for llama2-family checkpoints. On a
+   vocab 32000 × dim 4096 model that is **524 MB copied for nothing**, doubling
+   the lender's memory for the largest single tensor. `Weights.wcls` is now
+   `Option<Vec<f32>>` with a `classifier()` accessor that falls back to the
+   embedding table. Two tests pin both configurations.
+2. **A per-token allocation in the hot loop.** `forward` did
+   `let x_final = state.x.clone()` on every single token so it could RMSNorm
+   into `state.x`. It now normalizes into the existing `xb` scratch buffer.
+   One `dim`-sized allocation per generated token, gone.
+
+Neither changed any numerical result — the existing arithmetic tests
+(hand-computed RMSNorm/matmul, residual-only forward, KV-cache causality)
+pass unchanged, which is what makes this a safe refactor rather than a rewrite.
+
+Measured baseline after the fix (5.8M-parameter synthetic model, 6 layers,
+dim 256, vocab 4096, `-O`): **53 forward passes in 406 ms ≈ 7.7 ms/token** on
+this container's CPU. Recorded so a future optimization has something to beat.
+
 ### 1.12 A5 is wired end-to-end, but the tokens are still placeholders and there is no price negotiation `[NEW 2026-08-18]`
 
 The differentiator named in `V1_SCOPE.md` §4 — **paying for compute without a
@@ -505,9 +530,20 @@ token** — now actually happens over the wire:
 > - `panic_stop` treats refunding as best-effort: a failure is logged and the
 >   stop continues. **Stopping matters more than refunding.**
 >
-> **Still true**: `panic_stop` has no caller — no signal/Ctrl-C handler is wired
-> (§2.4). The mechanism is now correct and tested; what remains is deciding
-> where to trigger it from, which is a product decision, not a gap in this path.
+> **Trigger wired the same day.** `panic_stop` is no longer callerless: the
+> `rope earn` loop polls for a **sentinel file** (`~/.rope/STOP`) and for
+> `is_stop_requested()`, and calls `panic_stop` when either fires.
+> - **Why a file and not a signal**: Rust's `std` has no signal API,
+>   `signal-hook` cannot be added here, and reaching for `libc::signal` would
+>   need `unsafe` — which `Cargo.toml` denies crate-wide (規範5). A file is
+>   coarser than SIGINT but it is a *working* lever, which "no trigger at all"
+>   was not. Replace it with a real handler when a signal crate is available.
+> - The accept loop is **non-blocking** (`set_nonblocking(true)` + 200 ms poll).
+>   A blocking `accept()` would mean the stop request is not noticed until the
+>   next connection arrives — useless as an emergency stop.
+> - Limitation, stated plainly: **a job already executing runs to completion.**
+>   The generation loop does not poll the sentinel. That is bounded by
+>   `max_output_tokens`, so it is short, but it is not instantaneous.
 - Found by a systematic axiom-pair sweep (2026-08-08,
   [`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §4i), asking what
   *should* happen to the borrower's funds when the lender exercises their
