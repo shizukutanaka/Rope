@@ -171,6 +171,31 @@ compiles", and emphatically ≠ "it works".** CI remains the shipping gate.
   integration code once §0 is resolved (dependency versions, AutoNAT/DCUtR
   config snippets).
 
+### 1.14 `Workload::Batch` / `Agent` deleted — the type now matches what v1 carries `[DONE 2026-08-18]`
+
+Applying Musk's 10% rule to myself: **nothing that was deleted came back**,
+which by that rule means the cut was too shallow. Re-checked what remained:
+
+- `Workload::Batch` and `Workload::Agent` are constructed by **no verb**, map to
+  **no axiom** (`FIRST_PRINCIPLES_AUDIT.md`), and — decisively — the wire format
+  added the same day (`net::wire::Message::JobRequest`) carries **only
+  model + prompt + max_output_tokens**. The type claimed a generality the
+  product does not have.
+- Deleted with them: `Optimization::SemanticCache` (only reachable from
+  `Batch`), the early-return guard in `build_inference_steps` (every workload is
+  now inference), and the `_ => {}` catch-all in `submit`.
+- `Workload` is now a single-variant enum. Kept as an enum, not flattened to a
+  struct: it is the extension point when v2 restores `Train`/`Retrieve`.
+
+**Net −63 lines across `src/`**, and the type surface now says exactly what the
+product does.
+
+**What made this safe** (it would not have been earlier): the offline
+type-checker located all six broken test fixtures by exact line, and surfaced
+**three rustc warnings** the change introduced (`unreachable_pattern`,
+`unused_mut`, `unused_assignments`). Since CI runs `RUSTFLAGS="-D warnings"`,
+those would have been CI failures. Fixed before pushing.
+
 ### 1.13 Two resource bugs in the inference path, found by re-reading what shipped `[FIXED 2026-08-18]`
 
 Found by applying ③/④ to `net/inference.rs` **after** it worked — which is the

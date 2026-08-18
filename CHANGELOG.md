@@ -149,6 +149,23 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Removed
 
+- **②の完遂: `Workload::Batch` / `Workload::Agent` を削除** —
+  Musk の 10% ルール (「削除したものが 1 つも戻らないなら削り足りない」) を
+  自分に適用した結果。**何一つ戻らなかった**ので、残りを見直した。
+  - どの動詞からも構築されず、どの公理にも対応せず、**同日追加したワイヤ形式
+    (`Message::JobRequest`) が運ぶのは model + prompt + max_output_tokens だけ**
+    だった。型が製品に無い一般性を主張していた
+  - 道連れ: `Optimization::SemanticCache` (`Batch` からしか到達しない)、
+    `build_inference_steps` の早期 return ガード (全て推論になったため)、
+    `submit` の `_ => {}` catch-all
+  - `Workload` は単一 variant の enum になったが、**enum のまま残す** —
+    v2 で `Train`/`Retrieve` を戻す時の拡張点だから
+  - **`src/` 正味 −63 行**。型の表面が製品の実態と一致した
+  - **これが安全にできたのは型検査ハーネスがあるから** — 壊れたテスト 6 箇所を
+    行番号付きで特定し、さらに**この変更が生んだ rustc 警告 3 件**
+    (`unreachable_pattern` / `unused_mut` / `unused_assignments`) を出した。
+    CI は `-D warnings` なので、**そのまま push していれば CI で落ちていた**
+
 - **②削除の実施: `Workload::Train` / `Workload::Retrieve` / `TrainingMethod` を
   コードから削除** (`src/core/intent.rs`) — `docs/V1_SCOPE.md` §2 の決定を、
   文書だけでなく型で実行した。これは行数削減ではなく**攻撃面の削除**である:

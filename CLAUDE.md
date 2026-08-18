@@ -154,6 +154,8 @@ W7 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashManag
    後者は `src/` の **100% (lib + bin + テスト本体) を rustc に通す** —
    crates.io 不要。網羅性漏れ (E0004)・型不一致 (E0308)・未定義名 (E0425)・
    借用エラー (E0382) を検出する (`selftest.sh` が毎回それを実証する)。
+   **rustc 自身の警告も出る** (`unreachable_pattern`/`unused_mut` 等)。
+   CI は `-D warnings` なので、**これを見ずに push すると CI で落ちる**。
    **これで「コンパイラ無しで削除するのは怖い」という制約は解けている。**
 
    ⚠️ **ただし `cargo check` の代用であって `cargo test`/`clippy`/`build` では

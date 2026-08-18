@@ -126,6 +126,12 @@ impl Intent {
 /// pickle RCE 面) と `Retrieve` (corpus 管理) を削除したことで、
 /// 「A9 の絶対条件」とした 2 つの制約が実装ではなく削除で満たされている。
 /// v2 で戻す場合の根拠は `docs/SURPLUS_AND_GAPS.md` §1.11 に残してある。
+///
+/// **2026-08-18 追記**: `Batch` と `Agent` も削除した。どの動詞からも構築されず、
+/// どの公理にも対応せず、**ワイヤ形式 (`net::wire::Message::JobRequest`) が
+/// 運ぶのはプロンプト推論だけ**だったため。Musk の 10% ルール
+/// (「削除したものが 1 つも戻らないなら削り足りない」) を自分に適用した結果。
+/// v1 が運ぶものと型が一致した。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Workload {
@@ -134,17 +140,6 @@ pub enum Workload {
         model: String,
         prompt_tokens_est: u32,
         max_output_tokens: u32,
-    },
-    /// Batch inference job (many prompts).
-    Batch {
-        model: String,
-        num_items: u64,
-        avg_tokens_per_item: u32,
-    },
-    /// Long-running agent session.
-    Agent {
-        agent_id: String,
-        expected_turns: u32,
     },
 }
 
@@ -164,25 +159,6 @@ impl Workload {
                     ComplexityClass::Medium
                 } else {
                     ComplexityClass::Large
-                }
-            }
-            Workload::Batch {
-                num_items,
-                avg_tokens_per_item,
-                ..
-            } => {
-                let total = num_items.saturating_mul(*avg_tokens_per_item as u64);
-                if total < 1_000_000 {
-                    ComplexityClass::Medium
-                } else {
-                    ComplexityClass::Large
-                }
-            }
-            Workload::Agent { expected_turns, .. } => {
-                if *expected_turns < 10 {
-                    ComplexityClass::Small
-                } else {
-                    ComplexityClass::Medium
                 }
             }
         }
@@ -433,7 +409,6 @@ pub enum Optimization {
     Quantization,        // quantization.rs
     SpeculativeDecoding, // spec_decode.rs
     PrefixCaching,       // kv_cache.rs
-    SemanticCache,       // semantic_cache.rs
     MoeExpertRouting,    // moe.rs
     MultiLora,           // lora.rs
     SpotPricing,         // spot.rs
@@ -447,7 +422,6 @@ impl std::fmt::Display for Optimization {
             Optimization::Quantization => write!(f, "量子化"),
             Optimization::SpeculativeDecoding => write!(f, "投機デコード"),
             Optimization::PrefixCaching => write!(f, "プレフィックスキャッシュ"),
-            Optimization::SemanticCache => write!(f, "セマンティックキャッシュ"),
             Optimization::MoeExpertRouting => write!(f, "MoE ルーティング"),
             Optimization::MultiLora => write!(f, "マルチ LoRA"),
             Optimization::SpotPricing => write!(f, "スポット価格"),
@@ -534,13 +508,9 @@ impl IntentManager {
             anyhow::bail!("Intent 既登録: {}", intent.id);
         }
         // 入力検証: 空モデル名を拒否
-        match &intent.workload {
-            Workload::Inference { model, .. } => {
-                if model.is_empty() {
-                    anyhow::bail!("モデル名が空");
-                }
-            }
-            _ => {}
+        let Workload::Inference { model, .. } = &intent.workload;
+        if model.is_empty() {
+            anyhow::bail!("モデル名が空");
         }
         let id = intent.id.clone();
         self.intents.push(intent);
@@ -735,7 +705,7 @@ impl IntentManager {
 
     fn select_model_variant(intent: &Intent) -> (String, bool) {
         match &intent.workload {
-            Workload::Inference { model, .. } | Workload::Batch { model, .. } => {
+            Workload::Inference { model, .. } => {
                 // Pick quantization based on privacy (on-device benefits most).
                 let quant = matches!(
                     intent.privacy,
@@ -747,7 +717,6 @@ impl IntentManager {
                     (model.clone(), false)
                 }
             }
-            Workload::Agent { agent_id, .. } => (format!("agent-{}", agent_id), false),
         }
     }
 
@@ -913,15 +882,11 @@ impl IntentManager {
         let mut steps = Vec::new();
         let mut opts = Vec::new();
         let mut order = base_order;
-        let mut cost_factor = 1.0_f64;
+        let cost_factor = 1.0_f64;
         let mut ms_factor = 1.0_f64;
 
-        if !matches!(
-            intent.workload,
-            Workload::Inference { .. } | Workload::Batch { .. }
-        ) {
-            return (steps, opts, cost_factor, 0);
-        }
+        // v1 の `Workload` はプロンプト推論だけなので、種別による早期 return は
+        // 不要になった (`Batch`/`Agent` 削除、2026-08-18)。
 
         // 低レイテンシ要求 → speculative decoding
         if intent.latency.as_ref().is_some_and(|l| l.p50_ms < 150) {
@@ -935,20 +900,6 @@ impl IntentManager {
             });
             opts.push(Optimization::SpeculativeDecoding);
             ms_factor *= 0.5;
-        }
-
-        // バッチ処理 → semantic cache
-        if matches!(intent.workload, Workload::Batch { .. }) {
-            order += 1;
-            steps.push(PlanStep {
-                order,
-                module: "semantic_cache".to_string(),
-                action: "セマンティックキャッシュ重複除去".to_string(),
-                estimated_ms: 0,
-                estimated_cost_usd: 0.0,
-            });
-            opts.push(Optimization::SemanticCache);
-            cost_factor *= 0.7;
         }
 
         // 常時: prefix caching
@@ -1239,10 +1190,10 @@ mod tests {
         };
         assert_eq!(small.complexity_class(), ComplexityClass::Small);
 
-        let large = Workload::Batch {
+        let large = Workload::Inference {
             model: "m".to_string(),
-            num_items: 1_000_000,
-            avg_tokens_per_item: 100,
+            prompt_tokens_est: 32_000,
+            max_output_tokens: 8_000,
         };
         assert_eq!(large.complexity_class(), ComplexityClass::Large);
     }
@@ -1253,23 +1204,6 @@ mod tests {
         assert!(!Privacy::OnDeviceOnly.allows_hyperscaler());
         assert!(Privacy::ConfidentialCompute.requires_tee());
         assert!(Privacy::AnyCompute.allows_hyperscaler());
-    }
-
-    #[test]
-    fn test_batch_enables_semantic_cache() {
-        let mut m = IntentManager::default();
-        let i = Intent::new(
-            Workload::Batch {
-                model: "llama".to_string(),
-                num_items: 10_000,
-                avg_tokens_per_item: 200,
-            },
-            "test",
-        )
-        .with_privacy(Privacy::AnyCompute);
-        let id = m.submit(i).unwrap();
-        let plan = m.resolve(&id, None, None).unwrap();
-        assert!(plan.optimizations.contains(&Optimization::SemanticCache));
     }
 
     #[test]
@@ -1437,10 +1371,11 @@ mod tests {
     fn test_minimize_watts_delegates_large_to_peer_not_spot() {
         let mut m = IntentManager::default();
         let i = Intent::new(
-            Workload::Batch {
+            // Large 相当のジョブ (>= 32,000 トークンで Large)
+            Workload::Inference {
                 model: "llama".to_string(),
-                num_items: 10_000,
-                avg_tokens_per_item: 200,
+                prompt_tokens_est: 32_000,
+                max_output_tokens: 8_000,
             },
             "test",
         )
@@ -1474,10 +1409,11 @@ mod tests {
     fn test_federated_routing_without_any_paired_peer_is_infeasible() {
         let mut m = IntentManager::default();
         let i = Intent::new(
-            Workload::Batch {
+            // Large 相当のジョブ (>= 32,000 トークンで Large)
+            Workload::Inference {
                 model: "llama".to_string(),
-                num_items: 10_000,
-                avg_tokens_per_item: 200,
+                prompt_tokens_est: 32_000,
+                max_output_tokens: 8_000,
             },
             "test",
         )
@@ -1528,10 +1464,11 @@ mod tests {
 
         let mut m = IntentManager::default();
         let i = Intent::new(
-            Workload::Batch {
+            // Large 相当のジョブ (>= 32,000 トークンで Large)
+            Workload::Inference {
                 model: "llama".to_string(),
-                num_items: 10_000,
-                avg_tokens_per_item: 200,
+                prompt_tokens_est: 32_000,
+                max_output_tokens: 8_000,
             },
             "test",
         )
@@ -1566,22 +1503,6 @@ mod tests {
             "推論ワークロードは常に PrefixCaching を含むべき"
         );
         assert!(steps.iter().any(|s| s.module == "kv_cache"));
-    }
-
-    /// 非推論ワークロードには推論最適化を積まない (早期 return のガード)。
-    /// v1 で `Train`/`Retrieve` を削除したため、残る非推論ワークロードは `Agent`。
-    #[test]
-    fn test_build_inference_steps_skip_for_non_inference() {
-        let i = Intent::new(
-            Workload::Agent {
-                agent_id: "a1".to_string(),
-                expected_turns: 5,
-            },
-            "test",
-        );
-        let (steps, opts, _, _) = IntentManager::build_inference_steps(&i, 0);
-        assert!(steps.is_empty(), "非推論ワークロードには推論最適化不要");
-        assert!(opts.is_empty());
     }
 
     /// Display はユーザー向け日本語 — Debug 形式ではない

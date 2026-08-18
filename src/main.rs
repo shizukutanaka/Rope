@@ -615,18 +615,31 @@ fn try_offload_to_peer(
         Some(v) => v,
         None => return Ok(None),
     };
-    let mgr = match core::pair::load_pair() {
-        Ok(m) => m,
-        Err(_) => return Ok(None),
-    };
+    let mut mgr = core::pair::load_pair().unwrap_or_default();
     // ポート 0 を広告しているピア (待受していない) は飛ばす
-    let candidates: Vec<_> = mgr
-        .discovered
-        .iter()
-        .filter(|p| p.endpoint.port() != 0 && !p.advertised_pubkey.is_empty())
-        .collect();
+    let usable = |m: &core::pair::PairManager| -> Vec<(std::net::SocketAddr, String)> {
+        m.discovered
+            .iter()
+            .filter(|p| p.endpoint.port() != 0 && !p.advertised_pubkey.is_empty())
+            .map(|p| (p.endpoint, p.display_name.clone()))
+            .collect()
+    };
+
+    let mut candidates = usable(&mgr);
     if candidates.is_empty() {
-        return Ok(None);
+        // A8 (ゼロコンフィグ): `rope pair` を先に打たせない。
+        // 知っているピアが居なければ、その場で探しに行く。
+        // 「earn した相手が居るのに run が使えない」のは設定を要求しているのと同じ。
+        println!("🔍 使えるピアが登録されていません。LAN を探します…");
+        if discover_lan_peers(&mut mgr, DISCOVERY_WINDOW)? > 0 {
+            if let Err(e) = core::pair::save_pair(&mgr) {
+                eprintln!("⚠️  発見結果を保存できませんでした ({})", e);
+            }
+            candidates = usable(&mgr);
+        }
+        if candidates.is_empty() {
+            return Ok(None);
+        }
     }
 
     let job_id = uuid_like_id();
@@ -634,10 +647,10 @@ fn try_offload_to_peer(
     let mut ecash = core::ecash::load_ecash().unwrap_or_default();
     let mut paid_sats = 0u64;
 
-    for peer in candidates {
-        println!("📡 {} に推論を依頼中…", peer.endpoint);
+    for (endpoint, display_name) in candidates {
+        println!("📡 {} ({}) に推論を依頼中…", display_name, endpoint);
         let mut stream = match std::net::TcpStream::connect_timeout(
-            &peer.endpoint,
+            &endpoint,
             std::time::Duration::from_secs(5),
         ) {
             Ok(s) => s,

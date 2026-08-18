@@ -65,6 +65,13 @@ GitHub の codeload / API も 403 で、crate ソースを別経路から取る�
 加えて (自己検証はしていないが同じ機構で検出される):
 トレイト境界の不足、ライフタイムの誤り、privacy 違反、重複定義。
 
+**rustc 自身の警告も出る** — `unreachable_pattern` / `unused_mut` /
+`unused_assignments` / `unused_imports` 等。`Cargo.toml` の CI は
+`RUSTFLAGS="-D warnings"` なので、**これらは CI では失敗になる**。
+実際 2026-08-18 の `Batch`/`Agent` 削除で 3 件の警告が出て、
+push 前に潰せた。**「型が通る」だけでなく「CI の警告ゲートも通りそう」まで
+分かる** (ただし clippy の lint は別 — 下記)。
+
 **「コンパイラ無しで削除するのは怖い」という制約は、これで解ける。**
 variant を消したら網羅性エラーで即座に分かる。
 
@@ -90,7 +97,8 @@ variant を消したら網羅性エラーで即座に分かる。
 5. **`--features http` の経路** — `reqwest`/`tokio` はスタブ化していない。
 6. **MSRV 1.75 適合** — ここの rustc は 1.94。1.94 で通っても
    1.75 で通るとは限らない (これは CI でしか確かめられない)。
-7. **clippy の lint** — `-D warnings` の品質ゲートは再現していない。
+7. **clippy の lint** — `clippy::redundant_clone` 等の clippy 固有の lint は
+   出ない (rustc 本体の警告は出る、上記)。
 8. **`core/` の実行時挙動・テストの成否** — `check.sh` は何も実行しない
    (スタブのデシリアライズは `unimplemented!()` で、走らせれば panic する)。
    `src/net/` の依存ゼロ 4 モジュールだけは `run-tests.sh` で**実際に走る**が、

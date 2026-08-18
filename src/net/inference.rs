@@ -1025,7 +1025,10 @@ impl InferenceEngine for CpuEngine {
         let mut output_tokens = 0u32;
         let mut token = prompt_tokens[0];
         let mut pos = 0u32;
-        let mut stop = StopReason::OutputLimit;
+        // 初期値を置かない: ループの脱出路は break だけで、どの break も
+        // 必ず代入する。初期値を置くと「代入されない経路がある」ように見えて
+        // 実際は常に上書きされる — CI の -D warnings で落ちる。
+        let stop;
 
         loop {
             if pos >= self.model.config.seq_len {
