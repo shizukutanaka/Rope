@@ -142,7 +142,13 @@ W7 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashManag
 
    ```sh
    rustfmt --edition 2021 --check <触ったファイル>   # 構文・整形
-   tools/offline-typecheck/check.sh                 # 型検査 (約 2.5 秒)
+   tools/offline-typecheck/check.sh                 # 型検査 (src/ 全体、約 2.5 秒)
+   tools/offline-typecheck/run-tests.sh             # net/ の 4 モジュールを**実行**
+   ```
+
+   あるいは 3 つまとめて (cargo が使えれば本物のゲートも回る):
+   ```sh
+   git config core.hooksPath .githooks   # 1 度だけ。以後 push 前に自動で走る
    ```
 
    後者は `src/` の **100% (lib + bin + テスト本体) を rustc に通す** —

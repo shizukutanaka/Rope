@@ -3,9 +3,16 @@
 `cargo` が使えない環境で `src/` 全体を **rustc に通す**ための道具。
 
 ```sh
-tools/offline-typecheck/check.sh      # 型検査 (約 2.5 秒)
+tools/offline-typecheck/check.sh      # 型検査: src/ 全体 (約 2.5 秒)
+tools/offline-typecheck/run-tests.sh  # テストを**実際に実行** (依存ゼロの 4 モジュール)
 tools/offline-typecheck/selftest.sh   # ハーネス自体の健全性検証
 ```
+
+**`run-tests.sh` は型検査ではなく実行である。** `src/net/` の
+`inference` / `mdns` / `wire` / `transport` は外部 crate を一切使わないので、
+rustc に直接渡せばテストが本当に走る — 実 UDP マルチキャストでのピア発見も、
+実 TCP 越しのジョブ往復と支払いも、Transformer の数値検証も含めて。
+`core/` (serde/chrono/uuid 依存) は対象外で、そちらは CI が要る。
 
 ---
 
@@ -84,8 +91,10 @@ variant を消したら網羅性エラーで即座に分かる。
 6. **MSRV 1.75 適合** — ここの rustc は 1.94。1.94 で通っても
    1.75 で通るとは限らない (これは CI でしか確かめられない)。
 7. **clippy の lint** — `-D warnings` の品質ゲートは再現していない。
-8. **実行時の挙動・テストの成否** — **何も実行しない**。
-   スタブのデシリアライズは `unimplemented!()` で、走らせれば panic する。
+8. **`core/` の実行時挙動・テストの成否** — `check.sh` は何も実行しない
+   (スタブのデシリアライズは `unimplemented!()` で、走らせれば panic する)。
+   `src/net/` の依存ゼロ 4 モジュールだけは `run-tests.sh` で**実際に走る**が、
+   `core/` は走らない。
 9. **暗号的性質** — `blake3`/`ed25519`/`rand` のスタブは
    ゼロを返し、検証は常に `Ok`。**セキュリティ上の保証はゼロ。**
 
@@ -106,7 +115,8 @@ CI は数分、これは 2.5 秒で、編集中のループはこちらの方が
 
 ```
 tools/offline-typecheck/
-  check.sh                    型検査の実行 (これを叩く)
+  check.sh                    型検査の実行 (src/ 全体)
+  run-tests.sh                依存ゼロ 4 モジュールのテストを**実行**
   selftest.sh                 ハーネス自体の健全性検証
   shims/
     serde_derive_shim.rs      proc-macro: Serialize / Deserialize
@@ -114,7 +124,7 @@ tools/offline-typecheck/
     serde.rs serde_json.rs chrono.rs uuid.rs anyhow.rs
     blake3.rs ed25519_dalek.rs rand.rs base64.rs hex.rs
     tracing.rs dirs.rs clap.rs
-  .build/                     中間生成物 (git 管理外)
+  .build/ .build-tests/       中間生成物 (git 管理外)
 ```
 
 `tools/` は `src/`・`examples/`・`tests/`・`benches/` のいずれでもないため、

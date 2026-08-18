@@ -1,5 +1,26 @@
 # Contributing to Rope
 
+## crates.io に到達できない環境で作業する場合
+
+`cargo` が使えない環境 (`docs/SURPLUS_AND_GAPS.md` §0) では、以下が代替になる:
+
+```sh
+git config core.hooksPath .githooks   # 1 度だけ。push 前に下記を自動で回す
+```
+
+フックが回すもの:
+
+1. `rustfmt --check` — 構文と整形
+2. `tools/offline-typecheck/check.sh` — **`src/` 全体を rustc に通す** (約 2.5 秒)
+3. `tools/offline-typecheck/run-tests.sh` — `src/net/` の依存ゼロ 4 モジュールの
+   テストを**実際に実行**する (実 UDP マルチキャスト・実 TCP を含む)
+4. `cargo` が使えるなら `test`/`clippy`/`fmt` の本物のゲート
+
+⚠️ **1-3 は CI の代わりにはならない。** clippy・MSRV 1.75 適合・
+`--features http`・`core/` のテストは CI でしか確認できない。
+フックが通っても「ビルドできる」「動く」とは言わないこと (規範6)。
+
+
 Rope は「他人のアイドル GPU を、安全に、1 ドル未満で 60 秒借りる」ための
 Rust 製 CLI です。貢献を歓迎しますが、このプロジェクトには他と少し違う
 いくつかの明確な原則があります。最初に読んでください。

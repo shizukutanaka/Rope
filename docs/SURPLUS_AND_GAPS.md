@@ -320,7 +320,26 @@ token** — now actually happens over the wire:
        (an explicit "obfuscation only / no guarantee" variant)
     3. Treat consumer GPUs as **non-sensitive workloads only**
 
-### 1.5 CI defined but not activated `[BLOCKED:permission — corrected 2026-08]`
+### 1.5 CI defined but not activated `[BLOCKED:permission — interim gate added 2026-08-18]`
+
+> **Still blocked, and still one command for the repo owner**:
+> `git mv .github/ci.yml.disabled .github/workflows/ci.yml`.
+> Neither the git gateway nor the GitHub App has `workflows` permission
+> (both paths measured returning 403).
+>
+> **What was added instead** — automation that needs no such permission:
+> - `tools/offline-typecheck/run-tests.sh` **actually runs** the tests of the
+>   four dependency-free `src/net/` modules (56 tests: real UDP multicast
+>   discovery, a real TCP job round-trip with payment, transformer numerics).
+>   Until now those only ran because they were invoked by hand.
+> - `.githooks/pre-push` chains rustfmt → type-check → those tests → and the
+>   real cargo gate when cargo happens to work. Opt-in with
+>   `git config core.hooksPath .githooks`.
+>
+> **This is not a CI replacement and must not be described as one.** It cannot
+> see clippy lints, MSRV-1.75 compatibility, `--features http`, or any `core/`
+> test (those need serde/chrono/uuid). A green hook still only means
+> "types check and the dependency-free modules pass".
 > **⚠️ 2026-08-18 訂正**: この項目はこれまで `[BLOCKED:consent]` とし、
 > 「secrets アクセスを伴う自動パイプラインの起動にユーザーの明示同意が必要」と
 > 記録していた。**ファイルを読んで確認した結果、これは誤りだった** —

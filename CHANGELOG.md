@@ -212,6 +212,21 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Added
 
+- **⑤自動化: テストを実際に走らせる仕組みと、push 前ゲート** —
+  `workflows` 権限が無くても回せる範囲の自動化。
+  - **`tools/offline-typecheck/run-tests.sh`** — `src/net/` の依存ゼロ 4 モジュール
+    (`inference`/`mdns`/`wire`/`transport`) のテストを **実際に実行する**
+    (56 件)。実 UDP マルチキャストでのピア発見、実 TCP 越しのジョブ往復と支払い、
+    Transformer の数値検証を含む。**これまでこれらは手で rustc を叩いた時しか
+    走っていなかった** — 自動化とは呼べない状態だった
+  - **`.githooks/pre-push`** — rustfmt → 型検査 → 上記テスト → (cargo が使えれば)
+    本物のゲート、を push 前に連鎖させる。オプトイン:
+    `git config core.hooksPath .githooks`
+  - ⚠️ **CI の代替ではない。** clippy・MSRV 1.75・`--features http`・`core/` の
+    テストはこれでは見えない。フックが緑でも「ビルドできる」「動く」とは
+    言わないこと (規範6)。CI の 1 手 (`git mv .github/ci.yml.disabled
+    .github/workflows/ci.yml`) は依然としてリポジトリ所有者にしかできない
+
 - **🎯 A5: トークン不要の決済が実際にワイヤを渡る** — `Message::Payment` +
   `JobPolicy::receive_payment`。**v1 の唯一の差別化 (`V1_SCOPE.md` §4) が
   エンドツーエンドで動く。** テスト 2 件が実ソケットで PASS。
