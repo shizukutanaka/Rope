@@ -375,6 +375,22 @@ fn generate_keypair() -> Result<()> {
     Ok(())
 }
 
+/// 秘密鍵をロード
+///
+/// ノード間フレームの署名 (`net::signing`) に使う。`load_public_key` と対で、
+/// `generate_keypair` が書いた Base64 形式をそのまま読む。
+///
+/// ⚠️ 返り値はメモリ上の秘密鍵そのもの。ログ・エラーメッセージ・永続化の
+/// いずれにも入れないこと。
+pub fn load_signing_key() -> Result<SigningKey> {
+    let b64 = fs::read_to_string(private_key_path()).context("秘密鍵読込失敗")?;
+    let bytes = BASE64.decode(b64.trim()).context("秘密鍵デコード失敗")?;
+    let key_bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("秘密鍵長不正"))?;
+    Ok(SigningKey::from_bytes(&key_bytes))
+}
+
 /// 公開鍵をロード
 pub fn load_public_key() -> Result<VerifyingKey> {
     let b64 = fs::read_to_string(public_key_path()).context("公開鍵読込失敗")?;

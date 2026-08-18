@@ -61,7 +61,36 @@ compiles", and emphatically ≠ "it works".** CI remains the shipping gate.
 
 ## 1. GAPS (不足) — missing functionality, ranked by what blocks what
 
-### 1.1 No real cryptography anywhere money or attestation touches `[BLOCKED:build]`
+### 1.1 No real cryptography anywhere money or attestation touches `[PARTLY RESOLVED 2026-08-18 — frame signing is real; encryption and BDHKE are not]`
+
+> **What changed**: `src/net/signing.rs` uses **real `ed25519-dalek`** (already a
+> dependency, not hand-rolled) to sign and `verify_strict` every inter-node
+> frame. Node-to-node messages now have genuine **integrity and authenticity**.
+>
+> **What did NOT change, and this is the important half**:
+> - **There is still no encryption.** `src/net/transport.rs` sends prompts in
+>   **plaintext**. Signing proves *who sent it* and *that nobody altered it*;
+>   it does not stop a passive LAN observer from reading it.
+> - Noise, BDHKE and NRAS are still placeholders. The Noise handshake was **not**
+>   hand-rolled — this entry's own prohibition was respected.
+>
+> **How the prohibition was respected while still shipping a transport**: the
+> ban applies to **primitives**, not to framing, message definitions, size caps
+> or ordering rules. `src/net/wire.rs` implements only the latter and takes
+> `FrameSigner`/`FrameVerifier` **as injected traits**. Consequences:
+> - the only file touching a crypto crate is a ~40-line adapter (`signing.rs`)
+> - the protocol logic is **dependency-free and therefore actually testable in
+>   this container** — 11 wire tests + 4 transport tests run for real, including
+>   a full job crossing a real TCP socket
+> - when `snow` becomes installable, it slots in behind the same traits
+>
+> **The plaintext transport is refused by default.** `transport::plaintext_allowed()`
+> reads `ROPE_ALLOW_PLAINTEXT` and both `serve_connection` and `request_job`
+> return `PlaintextNotAllowed` unless it is `1`. The decision to send prompts
+> over an unencrypted LAN is handed to the operator with the reason stated,
+> rather than made silently.
+
+**Original finding, kept for context:**
 - `src/core/ecash.rs:441-470` `build_proof` — Cashu BDHKE unblinding is
   `blake3::hash("C|keyset|amount|secret")` reshaped into secp256k1-point-shaped
   bytes. Not real elliptic-curve math. Same in `src/net/cashu_mint.rs:520-556`
@@ -84,7 +113,7 @@ compiles", and emphatically ≠ "it works".** CI remains the shipping gate.
   do this without explicit sign-off. secp256k1 has no such shortcut available
   in already-vendored deps.
 
-### 1.2 No real P2P I/O `[PARTLY RESOLVED 2026-08-18 — discovery is real; transport is not]`
+### 1.2 No real P2P I/O `[PARTLY RESOLVED 2026-08-18 — discovery AND transport are real; encryption is not]`
 
 > **`src/net/mdns.rs` opens real UDP multicast sockets.** `rope pair` now sends a
 > `_rope._tcp.local` PTR query to 224.0.0.251:5353, answers other peers' queries,
@@ -112,14 +141,22 @@ compiles", and emphatically ≠ "it works".** CI remains the shipping gate.
 >   discarded rather than erroring. Fuzz-ish tests feed it 2,000 random buffers
 >   and every truncation of a valid packet; none panic.
 >
-> **What is still missing — and it is the important half**: there is **no
-> transport**. Nothing is encrypted, nothing is authenticated, and **no job,
-> prompt or payment crosses the network**. mDNS advertises what AirDrop and a
-> network printer advertise: that this host runs Rope, plus a public key. The
-> next step is the Noise handshake, which `docs/SURPLUS_AND_GAPS.md` §1.1
-> explicitly says must not be hand-rolled without sign-off. **Until then Rope
-> discovers peers but cannot talk to them**, and `rope run` still executes
-> locally.
+> **Transport landed the same day** (`src/net/wire.rs` + `src/net/transport.rs`).
+> A job now really crosses a TCP socket: `rope run` asks a discovered peer
+> first and only falls back to local execution, `rope earn` listens and runs
+> the borrower's prompt through the real engine. **4 transport tests run for
+> real**, including a full job over a loopback socket answered by the actual
+> transformer.
+>
+> **What is still missing**: **encryption** (§1.1). Frames are signed with real
+> ed25519 — integrity and authenticity hold — but the payload is plaintext, so
+> a passive LAN observer reads the prompt. The transport therefore **refuses to
+> run unless `ROPE_ALLOW_PLAINTEXT=1`**. Noise remains the next step and must
+> not be hand-rolled (§1.1).
+>
+> Also still missing: **payment is not wired to the transport** (A5). A job
+> crosses the wire and is executed, but no escrow is opened and no proof
+> changes hands. That is the last unwired axiom of v1.
 
 **Original finding, kept for context:**
 - `src/core/pair.rs` — mDNS/Bluetooth/DHT discovery and the Noise handshake

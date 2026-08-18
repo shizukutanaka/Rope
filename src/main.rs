@@ -344,6 +344,49 @@ fn run_pair(accept_mode: &str) -> Result<()> {
 /// LAN 探索に使う時間。AirDrop 的な体感を壊さない範囲で。
 const DISCOVERY_WINDOW: std::time::Duration = std::time::Duration::from_millis(1500);
 
+/// 自分の名乗りと署名器を組み立てる。
+///
+/// 鍵が無い (初期化に失敗した) 環境では `None` — 転送機能を諦めるだけで、
+/// 他の動詞は動き続ける。
+fn node_identity() -> Option<(
+    rope::net::transport::NodeIdentity,
+    rope::net::signing::Ed25519Signer,
+)> {
+    use rope::net::signing::Ed25519Signer;
+    use rope::net::transport::NodeIdentity;
+
+    let cfg: core::config::Config =
+        core::config::load_or_recover(&core::config::config_path(), "config");
+    let pubkey = hex::encode(core::config::load_public_key().ok()?.to_bytes());
+    let signing = core::config::load_signing_key().ok()?;
+    Some((
+        NodeIdentity {
+            node_id: cfg.node.id,
+            pubkey,
+        },
+        Ed25519Signer::new(signing),
+    ))
+}
+
+/// 相手が名乗った公開鍵から検証器を作る。
+///
+/// **これが証明するのは「相手はその秘密鍵を持っている」ことだけ。**
+/// その鍵を信じてよいかは別問題で、v1 では**確認コードの目視照合 (TOFU)** が
+/// 唯一の判断材料である (`SECURITY.md`)。ここで誰の鍵でも受けるのは、
+/// 初対面を許すという TOFU の定義そのもの。
+fn tofu_verifier(pubkey: &str) -> Option<Box<dyn rope::net::wire::FrameVerifier>> {
+    rope::net::signing::Ed25519Verifier::from_hex(pubkey)
+        .map(|v| Box::new(v) as Box<dyn rope::net::wire::FrameVerifier>)
+}
+
+/// 平文転送が無効な時に、理由と有効化方法を 1 度だけ表示する。
+fn explain_plaintext_gate() {
+    println!("🔒 ピア転送は無効です (プロンプトが平文で流れるため)。");
+    println!("   Noise 鍵交換が未実装で、検証済みの暗号 crate をこの環境に追加できません。");
+    println!("   同じ LAN を信頼できる場合のみ、次で明示的に有効化してください:");
+    println!("     ROPE_ALLOW_PLAINTEXT=1 rope …");
+}
+
 /// mDNS で LAN のピアを探し、見つかった分を `PairManager` に記録する。
 ///
 /// 返り値は**新たに記録できたピア数**。探索そのものが失敗しても
@@ -507,6 +550,19 @@ fn run_inference(
 
     save_intent(&mgr)?;
 
+    // A1+A3: **まず他人に頼む** — それがこの製品の存在理由。
+    // 頼めなければローカルで走らせ、どちらだったかを必ず表示する。
+    if let Some(c) = try_offload_to_peer(model, prompt, budget_sats)? {
+        println!("{}", c.text);
+        println!();
+        println!(
+            "  ({} プロンプトトークン → {} 生成トークン / forward {} 回 / **ピアが計算**)",
+            c.prompt_tokens, c.output_tokens, c.forward_passes
+        );
+        println!();
+        return Ok(());
+    }
+
     // A3: ここから先は実際に計算する。モデルが無ければ「無い」と言う (規範6)。
     match run_local_inference(model, prompt)? {
         Some(c) => {
@@ -537,6 +593,83 @@ fn run_inference(
     }
 }
 
+/// 発見済みピアに推論を頼んでみる。
+///
+/// **これが成功して初めて「他人の GPU を借りた」ことになる。**
+/// 頼める相手が居ない・平文が許可されていない・全員失敗した場合は `Ok(None)` で、
+/// 呼び出し元はローカル実行へ落ちる。
+///
+/// ⚠️ 現状この経路は**暗号化されていない**。`ROPE_ALLOW_PLAINTEXT=1` が
+/// 無ければ何もせず `Ok(None)` を返す。
+fn try_offload_to_peer(
+    model: &str,
+    prompt: &str,
+    budget_sats: u64,
+) -> Result<Option<rope::net::transport::Executed>> {
+    use rope::net::transport::{plaintext_allowed, request_job};
+
+    if !plaintext_allowed() {
+        return Ok(None);
+    }
+    let (me, signer) = match node_identity() {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+    let mgr = match core::pair::load_pair() {
+        Ok(m) => m,
+        Err(_) => return Ok(None),
+    };
+    // ポート 0 を広告しているピア (待受していない) は飛ばす
+    let candidates: Vec<_> = mgr
+        .discovered
+        .iter()
+        .filter(|p| p.endpoint.port() != 0 && !p.advertised_pubkey.is_empty())
+        .collect();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    let job_id = uuid_like_id();
+    for peer in candidates {
+        println!("📡 {} に推論を依頼中…", peer.endpoint);
+        let mut stream = match std::net::TcpStream::connect_timeout(
+            &peer.endpoint,
+            std::time::Duration::from_secs(5),
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("   繋がりませんでした ({})", e);
+                continue;
+            }
+        };
+        match request_job(
+            &mut stream,
+            &me,
+            &signer,
+            &tofu_verifier,
+            &job_id,
+            model,
+            prompt,
+            256,
+            budget_sats,
+        ) {
+            Ok(ex) => return Ok(Some(ex)),
+            Err(e) => println!("   断られました ({})", e),
+        }
+    }
+    Ok(None)
+}
+
+/// ジョブ ID。`uuid` crate を使わないのは、ここでは一意でありさえすればよく、
+/// `core` の永続 ID とは用途が違うため。
+fn uuid_like_id() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("job-{:x}-{:x}", now, std::process::id())
+}
+
 /// 貸し手がモデルを置く場所。**借り手はここに影響できない** (A9)。
 ///
 /// `ROPE_MODEL_DIR` で上書きできるが、これは貸し手の環境変数であって
@@ -556,6 +689,18 @@ fn run_local_inference(
     model: &str,
     prompt: &str,
 ) -> Result<Option<rope::net::inference::Completion>> {
+    run_local_inference_limited(model, prompt, 256)
+}
+
+/// 生成トークン数の上限を指定してローカル推論を実行する。
+///
+/// 貸し手として他人のジョブを走らせる時は、相手の希望値をそのまま信じず
+/// 自分の上限で頭打ちにする (A9)。
+fn run_local_inference_limited(
+    model: &str,
+    prompt: &str,
+    max_output_tokens: u32,
+) -> Result<Option<rope::net::inference::Completion>> {
     use rope::net::inference::{
         safe_model_stem, CheckpointLimits, CpuEngine, ExecutionLimits, InferenceEngine, Sampler,
     };
@@ -574,7 +719,7 @@ fn run_local_inference(
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let limits = ExecutionLimits {
         max_prompt_tokens: 2048,
-        max_output_tokens: 256,
+        max_output_tokens,
     };
     // seed は固定。同じプロンプトで同じ出力になる方が、この段階では検証しやすい。
     let completion = engine
@@ -639,10 +784,139 @@ fn run_earn(rate_sats_per_sec: u64, max_minutes: u32) -> Result<()> {
         println!();
     }
 
-    capability_boundary!(
-        working: "Session::Waiting 状態 + verify code + ecash 残高",
-        next: "実 GPU 貸出ループ (mDNS リスナ + Noise 受信)"
-    );
+    // A1+A3: 実際にジョブを受ける。平文が許可されていなければ理由を出して終わる。
+    if !rope::net::transport::plaintext_allowed() {
+        explain_plaintext_gate();
+        capability_boundary!(
+            working: "Session::Waiting + verify code + ecash 残高 + 実 mDNS 広告",
+            next: "Noise 鍵交換 (暗号化された転送)"
+        );
+    }
+    serve_jobs(max_minutes)?;
+    Ok(())
+}
+
+/// 貸し手のループ本体: TCP で待ち受け、mDNS で自分を広告し、来たジョブを実行する。
+///
+/// **1 接続ずつ順に処理する。** 並行実行は貸し手の資源を予測不能にするので、
+/// v1 では素直に直列にする (A9)。
+fn serve_jobs(max_minutes: u32) -> Result<()> {
+    use rope::net::mdns::{Advertisement, Mdns};
+    use rope::net::transport::{serve_connection, Executed, JobPolicy};
+
+    let (me, signer) = match node_identity() {
+        Some(v) => v,
+        None => {
+            println!("⚠️  鍵が読めないため貸出を開始できません。");
+            return Ok(());
+        }
+    };
+
+    let listener = std::net::TcpListener::bind(("0.0.0.0", 0))?;
+    let port = listener.local_addr()?.port();
+
+    let cfg: core::config::Config =
+        core::config::load_or_recover(&core::config::config_path(), "config");
+    let adv = Advertisement {
+        instance: std::env::var("HOSTNAME")
+            .or_else(|_| std::env::var("USER"))
+            .unwrap_or_else(|_| "rope".to_string()),
+        port,
+        node_id: me.node_id.clone(),
+        fingerprint: cfg.node.fingerprint.clone(),
+        pubkey: me.pubkey.clone(),
+    };
+    // 1 回告知しておく。以後は問い合わせに答える形で見つけてもらう。
+    if let Ok(m) = Mdns::open() {
+        let _ = m.announce(&adv);
+    }
+
+    println!("🛰  ジョブ待受中: ポート {} (最大 {} 分)", port, max_minutes);
+    println!("   ⚠️  この経路は暗号化されていません。プロンプトは LAN 上で平文です。");
+    println!("   停止は Ctrl-C。");
+    println!();
+
+    struct LocalPolicy {
+        max_output_tokens: u32,
+    }
+    impl JobPolicy for LocalPolicy {
+        fn accept(
+            &self,
+            _peer_pubkey: &str,
+            model: &str,
+            _prompt: &str,
+            budget_sats: u64,
+        ) -> Result<(), String> {
+            // モデル名は外から来る文字列 — パスにする前に必ず無害化する (A9)
+            rope::net::inference::safe_model_stem(model).map_err(|e| e.to_string())?;
+            if budget_sats == 0 {
+                return Err("予算が 0 sats".to_string());
+            }
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            model: &str,
+            prompt: &str,
+            max_output_tokens: u32,
+        ) -> Result<Executed, String> {
+            // 相手の希望値をそのまま信じず、自分の上限で頭打ちにする (A9)
+            let capped = max_output_tokens.min(self.max_output_tokens);
+            match run_local_inference_limited(model, prompt, capped) {
+                Ok(Some(c)) => Ok(Executed {
+                    text: c.text,
+                    prompt_tokens: c.prompt_tokens,
+                    output_tokens: c.output_tokens,
+                    forward_passes: c.forward_passes,
+                }),
+                Ok(None) => Err(format!("モデル {} を持っていません", model)),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+    }
+
+    let policy = LocalPolicy {
+        max_output_tokens: 256,
+    };
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(max_minutes as u64 * 60);
+
+    for incoming in listener.incoming() {
+        if std::time::Instant::now() >= deadline {
+            println!("⏱  最大稼働時間に達しました。");
+            break;
+        }
+        let mut stream = match incoming {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("⚠️  接続を受けられませんでした ({})", e);
+                continue;
+            }
+        };
+        let peer = stream
+            .peer_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|_| "?".to_string());
+        // 1 接続の失敗で貸出全体を止めない
+        match serve_connection(&mut stream, &me, &signer, &tofu_verifier, &policy) {
+            Ok(job) if job.accepted => {
+                let ex = job.executed.unwrap_or(Executed {
+                    text: String::new(),
+                    prompt_tokens: 0,
+                    output_tokens: 0,
+                    forward_passes: 0,
+                });
+                println!(
+                    "✅ {} からのジョブを実行 ({} tok 出力 / forward {} 回)",
+                    peer, ex.output_tokens, ex.forward_passes
+                );
+            }
+            Ok(job) => println!("🚫 {} のジョブを謝絶 (job {})", peer, job.job_id),
+            Err(e) => println!("⚠️  {} との通信に失敗 ({})", peer, e),
+        }
+    }
+    Ok(())
 }
 
 /// プロセス間ロックを取得。取得できなければ (別 rope プロセスが実行中等)

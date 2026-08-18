@@ -17,12 +17,17 @@
      実行する。テスト 22 件が**この環境で実際に走る** (crate 全体は `cargo test` 不可)。
    - ✅ **LAN のピア発見も本物** — `src/net/mdns.rs` が実 UDP マルチキャストで
      `_rope._tcp.local` を探索・応答する。テスト 11 件がこの環境で実際に走る。
-   - ❌ **転送が無い**。Noise 鍵交換もジョブ転送も未実装なので、**ピアは見つかるが
-     話せない**。実暗号 (Noise/BDHKE)・実 TEE attestation 検証も未配線
-     (QR ペアリングの blake3 keyed-MAC だけ本物)。
+   - ✅ **転送も本物** — `src/net/wire.rs` + `transport.rs` で、ジョブは実際に TCP を
+     渡り、貸し手側で実行されて返る。フレームは実 `ed25519-dalek` で署名・検証する。
+     テスト 15 件がこの環境で実際に走る (実ソケット越しのジョブ往復を含む)。
+   - ⚠️ **暗号化だけが無い**。Noise は §1.1 が手書きを禁じており `snow` を追加
+     できない。転送は**既定で無効**で `ROPE_ALLOW_PLAINTEXT=1` が要る。
+   - ❌ **決済が未結線** (A5)。ジョブは渡って実行されるが escrow は開かれない。
+     **v1 で最後に残った公理**。実 BDHKE・実 TEE attestation 検証も未配線。
    - ❌ **GPU ではない**。CPU f32。GPU は `InferenceEngine` を実装すれば足せる。
-   - ⚠️ したがって **「他人の GPU を借りる」はまだ成立していない** — 計算は自分の
-     マシンで走る。残るのは A5 (ecash 結線) と A1 (mDNS/Noise)。
+   - ⚠️ したがって **「他人の GPU で計算する」は成立した** (LAN 上・平文・opt-in)。
+     **「トークン不要で払う」がまだ** — それが v1 の唯一の差別化なので、
+     残り 1 項目とはいえ製品の核心が未完である。
    これは隠れた欠陥ではなく意図的に開示された現状 → [`SECURITY.md`](SECURITY.md),
    [`docs/ASSESSMENT.md`](docs/ASSESSMENT.md)。README 冒頭のデモも「シミュレーション」
    と明記済み。
@@ -113,7 +118,7 @@ W7 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashManag
 |---|--------|-----------|-------|
 | ~~**1**~~ | ✅ **A3: 完了 (2026-08-18)** — `src/net/inference.rs` (依存ゼロ・CPU・テスト 22 件が実走)。**mistral.rs は使わなかった** (提供するのは GPU カーネルと速度であって「実行できる能力」ではない)。A9 は**攻撃面の除去**で満たした (外部コード非ロード / ヘッダ検証 / パス無害化 `safe_model_stem` / 計算量上限)。**プロセス隔離は未実装 — v2** | ✅ 済 | `docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md` (冒頭に実装後の訂正あり) |
 | **2** | **A5 を `rope run` に結線** (トークン不要決済 = 唯一の差別化) | `build` (k256) | [`CASHU_BDHKE_IMPLEMENTATION_READINESS.md`](docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md)。**DLEQ (NUT-12) を含めること** — LAN では mint 到達性が保証されず、オフライン検証が必須 (§4c) |
-| 🔶 **3** | **A1: 発見は完了 (2026-08-18)** — `src/net/mdns.rs` (依存ゼロ・テスト 11 件が実走)。**Iroh は使わなかった** (提供するのは NAT 越え・リレー・QUIC で、NAT 越えは v1 から削除済み)。**残りは Noise 鍵交換とジョブ転送** | **`sign-off`** | ⚠️ Noise の手書きは `SURPLUS_AND_GAPS.md` §1.1 が「検証済み crate (`snow`) 無しにやるな」と明示。**ユーザーの明示的同意が要る** |
+| ~~**3**~~ | ✅ **A1: 完了 (2026-08-18)** — 発見 (`mdns.rs`) と転送 (`wire.rs`/`transport.rs`)。テスト 26 件が実走。**Iroh は使わなかった**。⚠️ **暗号化のみ未実装** — `snow` を追加できず、§1.1 が手書きを禁じるため。転送は既定で無効 (`ROPE_ALLOW_PLAINTEXT=1` が要る) | ✅ 済 (暗号化を除く) | `SURPLUS_AND_GAPS.md` §1.1・§1.2 |
 | **4** | **`A9→A7` の欠落を直す** — 緊急停止時に未完了 escrow を返金 | **なし** (⚠️ 2026-08-18 中に 2 度訂正: 「なし」→「順 2 に依存」→**「なし」に戻る**。§1.8 修正が mint swap 不要だったため) | `SURPLUS_AND_GAPS.md` §1.10。**(a)** 「完了済みを返金しない」ガードは `refund_escrow` (`ecash.rs:830`) に**既にある**ので再実装不要 — 修正は当初想定より小さい。**(b)** `refund_escrow` は §1.8 の壊れた経路だったが**修正済**なので、`panic_stop` から呼んで問題ない。**残る設計課題は `Session` に `job_id` が無いこと** — 停止したセッションに紐づく escrow を引くキーが今は存在しない (grep 確認済み) |
 | 5 | ⑤ **CI 有効化 — 準備完了、あと 1 手** | **`権限`** (同意ではない) | ⚠️ **訂正**: 従来「secrets アクセスのため要同意」と記録していたが**誤り** — `.github/ci.yml.disabled` は `check`/`test`/`test-http`/`clippy`/`fmt`/`gate` のみで **secrets 参照ゼロ**。実際のブロッカーは **git gateway と GitHub App に `workflows` 権限が無い**こと (両経路で 403 実測)。**リポジトリ所有者が `git mv .github/ci.yml.disabled .github/workflows/ci.yml` すれば有効化される**。**CI はこの環境で唯一のコンパイラ検証手段** (ローカルは crates.io 403 だが Actions は到達可) |
 | — | ecash マネーパスの既知不整合 (§1.8/§1.9) | — | **A5 結線 (順 2) と同時に必ず直す** |
