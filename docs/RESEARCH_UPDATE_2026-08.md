@@ -664,10 +664,13 @@ A9 は貸し手の *参加条件* を与える。**自分のマシンが壊さ�
 **攻撃面は桁違いに狭い**。
 
 **とはいえ完全ではない** (ここが実装時に効く):
-- `Workload::Train { dataset_uri, ... }` (`intent.rs:132-137`) と RAG は
+- `Workload::Train { dataset_uri, ... }` (当時 `intent.rs:132-137`) と RAG は
   **借り手が指定した URI を貸し手がフェッチして処理する** →
   SSRF・悪性データ取り込みの経路になる。**Inference だけが安全で、
   Train/RAG は別の脅威モデル**という非対称性がある。
+  **→ 2026-08-18: この 2 つは削除された** (`V1_SCOPE.md` §2 /
+  `SURPLUS_AND_GAPS.md` §1.11)。v1 では借り手が渡すのはプロンプトのみで、
+  この経路自体が存在しない。v2 で `Train` を戻す場合に再燃する。
 - `panic_stop` が **docker 前提**である点は、A3 実装時に選ぶ分離技術
   (gVisor/Firecracker 等) と整合を取る必要がある。
 

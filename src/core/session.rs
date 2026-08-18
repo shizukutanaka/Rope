@@ -353,7 +353,7 @@ impl SessionManager {
 /// **ステータス**: 上記の通り安全性を最優先に設計・過去に一度バグ修正されている
 /// にもかかわらず、現状どこからも呼ばれていない (テストも含め)。シグナルハンドラ
 /// や Ctrl-C ハンドラが未配線なため。`cleanup`/`is_stop_requested`/`get_status`/
-/// `list_sessions`/`format_session_list`/`Session::load`/`SessionManager::end` も
+/// `list_sessions`/`Session::load`/`SessionManager::end` も
 /// 同様に呼び出し元ゼロ。「呼び出し元ゼロ」だけで削除すべきでない理由は
 /// `docs/SURPLUS_AND_GAPS.md` §2.4 / `docs/REACHABILITY_AUDIT.md` 参照 —
 /// 削除するか signal handler に配線するかは製品判断待ち。
@@ -589,23 +589,6 @@ pub fn list_sessions() -> Result<Vec<Session>> {
         }
     }
     Ok(sessions)
-}
-
-/// 全セッションを 1 文字列にフォーマット
-pub fn format_session_list(sessions: &[Session]) -> String {
-    if sessions.is_empty() {
-        return "アクティブなセッションなし。\n".to_string();
-    }
-    let mut out = format!("セッション一覧 ({}):\n", sessions.len());
-    out.push_str("═══════════════════════════════════════════════════\n");
-    for s in sessions {
-        out.push_str(&format!("  {}  {}", super::short(&s.id, 8), s.state));
-        if let Some(code) = &s.verify_code {
-            out.push_str(&format!("  code={}", code));
-        }
-        out.push('\n');
-    }
-    out
 }
 
 #[cfg(test)]

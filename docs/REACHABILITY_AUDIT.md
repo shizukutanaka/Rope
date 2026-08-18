@@ -113,7 +113,7 @@ prune/cleanup/refresh 系の関数を洗い出して個別に判断した:
 | session.rs | `get_status` | 一致箇所ゼロ |
 | session.rs | `cleanup` | 一致箇所ゼロ (doc comment に「cleanup() は呼ばない」と明記あり) |
 | session.rs | `list_sessions` | 一致箇所ゼロ |
-| session.rs | `format_session_list` | 一致箇所ゼロ |
+| session.rs | `format_session_list` | 一致箇所ゼロ → **2026-08-18 削除済** (`SURPLUS_AND_GAPS.md` §1.7) |
 | session.rs | `Session::load` | 一致箇所ゼロ |
 | session.rs | `SessionManager::end` | 一致箇所ゼロ (テストも `new`/`current`/`start`/`elapsed_seconds` のみ検証) |
 
@@ -161,11 +161,17 @@ prune/cleanup/refresh 系の関数を洗い出して個別に判断した:
 
 ## 副次的発見: `format_*` 関数の大半が未結線
 
-`format_pair` のみが `main.rs` から実際に呼ばれる。`format_confidential`/
-`format_ecash`/`format_plan`/`format_session`/`format_session_list`/`format_config`
-の 5 件はテストはあるが、どの動詞からも出力されない。将来的にこれらを
-diagnostics サブコマンド (例: `rope status --verbose`) として結線するか、
-削除するかは別途判断が必要。
+**監査時点 (2026-07)**: `format_pair` のみが `main.rs` から実際に呼ばれる。
+`format_confidential`/`format_ecash`/`format_plan`/`format_session`/
+`format_session_list`/`format_config` の 5 件はテストはあるが、どの動詞からも
+出力されない。
+
+**決着 (2026-08-18)**: `rope status --verbose` のような 5 つ目の動詞は作らず、
+formatter ごとに判断した。`format_plan` → `rope run`、`format_session` と
+`format_ecash` → `rope earn` に**結線** (いずれも `main.rs` 側の手書き整形の
+重複を消す形で)。`format_config`/`format_session_list` は**削除**。
+`format_confidential` は A6/TEE サブシステムごと v2 に延期するため据え置き。
+詳細と根拠は [`SURPLUS_AND_GAPS.md`](SURPLUS_AND_GAPS.md) §1.7。
 
 ## 次回実施手順 (ビルド可能な環境向け)
 

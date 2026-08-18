@@ -37,8 +37,51 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
   **ビルド不能環境でのマネーパス修正は CLAUDE.md §4 の運用規範に従い見送り**、
   コンパイラ検証可能な v0.3 での修正に委ねる
 
+### Removed
+
+- **②削除の実施: `Workload::Train` / `Workload::Retrieve` / `TrainingMethod` を
+  コードから削除** (`src/core/intent.rs`) — `docs/V1_SCOPE.md` §2 の決定を、
+  文書だけでなく型で実行した。これは行数削減ではなく**攻撃面の削除**である:
+  - `Train.dataset_uri` は**型surface 全体で唯一の借り手指定 URI** だった →
+    削除により SSRF / DNS リバインディングの経路が v1 に存在しなくなる
+  - `Train.base_model` は**唯一の借り手指定 weights 参照**だった →
+    削除により pickle RCE の経路が v1 に存在しなくなる
+  - → `SURPLUS_AND_GAPS.md` §1.11 が「A9 の絶対条件」とした 2 制約のうち
+    **URI 側は実装ではなく削除で満たされた**。モデル形式側 (SafeTensors/GGUF 限定)
+    は `Inference.model` に残るため **OPEN のまま**
+  - 追随した変更: `complexity_class` / `submit` の入力検証 / `select_model_variant`
+    の該当 match arm を削除 (残る 3 variant で網羅性は維持)。
+    `test_build_inference_steps_skip_for_training` は `Workload::Agent` を使う
+    `..._skip_for_non_inference` に書き換え (早期 return のガードは引き続きテスト
+    対象)。`test_empty_base_model_rejected` は対象が消えたため削除
+  - 後方互換: `Intent` は永続化されるが、`main.rs`/`first_run.rs` は
+    `Workload::Inference` しか構築しないため、CLI が書いた `~/.rope/intent.json` に
+    `kind: "train"`/`"retrieve"` は入り得ない
+- **`format_config` / `format_session_list` を削除** — どの動詞からも呼ばれず、
+  どの公理にも対応しない (`FIRST_PRINCIPLES_AUDIT.md` 監査表)。
+  データ API である `list_sessions` は残置
+
 ### Changed
 
+- **③単純化: `format_*` の重複整形を 1 箇所へ寄せ、`rope run`/`rope earn` に結線** —
+  `main.rs` が `ExecutionPlan` とセッションと ecash 残高を**手書きで整形し直して
+  いた**のを、core 側の既存 formatter へ統合。5 つ目の動詞 (`rope status`) は
+  作らない (4 動詞の設計原則を守る)。
+  - `format_plan` → `rope run`。手書き 20 行を削除。副次効果として
+    **ステップ一覧・選択モデル variant・推定遅延・推定消費電力が初めて表示される**
+    (手書き版は出していなかった)。`format_plan` の見出しに plan id を追加
+  - `format_session` → `rope earn`。ID / 確認コード / 上限の手書き行を削除
+  - `format_ecash` → `rope earn`。残高 1 行の手書きを置換。空ウォレットで
+    ゼロだらけの画面を出さないよう、既存の `total_sats > 0` ゲートは維持
+  - `format_confidential` は**据え置き** — A6/TEE サブシステムごと v2 に延期する
+    対象であり、延期するサブシステムから formatter だけ消すのは筋が悪い
+  - 詳細な判断根拠は `docs/SURPLUS_AND_GAPS.md` §1.7 (`[RESOLVED]` に更新)
+- **ビルド不能環境でも動く唯一の自動チェックを特定・記録** — `rustfmt` は
+  toolchain 同梱で registry を必要としないため、この環境でも
+  `rustfmt --edition 2021 --check <files>` が動く。**パーサなので構文エラーと
+  整形ずれは捕まえるが、型検査・借用検査・テストは一切しない**。
+  本セッションの `src/` 変更は全ファイルでこれを通してある。
+  `SURPLUS_AND_GAPS.md` §0 に「rustfmt が通る ≠ コンパイルできる」と明記
 - **⑤自動化 (CI) のブロッカー記述を訂正 — 「要同意」は誤りで、実際は「権限不足」** —
   Musk の①(要件を疑え)を自分のメモに適用した結果。従来 `[BLOCKED:consent]` として
   「secrets アクセスのため要同意」と記録していたが、**ファイルを読むと `env:` は

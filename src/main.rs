@@ -318,7 +318,8 @@ fn run_inference(
 ) -> Result<()> {
     use core::confidential::load_confidential;
     use core::intent::{
-        load_intent, save_intent, BudgetEnforcement, Intent, Privacy, VerificationLevel, Workload,
+        format_plan, load_intent, save_intent, BudgetEnforcement, Intent, Privacy,
+        VerificationLevel, Workload,
     };
     use core::pair::load_pair;
 
@@ -376,25 +377,9 @@ fn run_inference(
     let pair = load_pair().ok();
     let plan = mgr.resolve(&intent_id, confidential.as_ref(), pair.as_ref())?;
 
-    println!("⚙️  実行計画 ({})", core::short(&plan.id, 8));
-    println!("  プロバイダ: {}", plan.selected_provider);
-    println!("  ステップ数: {}", plan.steps.len());
-    if !plan.optimizations.is_empty() {
-        println!(
-            "  自動最適化: {}",
-            plan.optimizations
-                .iter()
-                .map(|o| o.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
-    println!("  推定コスト: ${:.4}", plan.estimated_cost_usd);
-    if !plan.feasible {
-        if let Some(r) = &plan.infeasibility_reason {
-            println!("  ⚠️  実行不可: {}", r);
-        }
-    }
+    // 整形は core::intent::format_plan が単独で持つ (v1 の単純化で main.rs 側の
+    // 手書き整形を削除 — 同じ ExecutionPlan を 2 箇所で整形しない)。
+    print!("{}", format_plan(&plan));
     println!();
 
     save_intent(&mgr)?;
@@ -410,9 +395,9 @@ fn run_inference(
 // ============================================================================
 
 fn run_earn(rate_sats_per_sec: u64, max_minutes: u32) -> Result<()> {
-    use core::ecash::load_ecash;
+    use core::ecash::{format_ecash, load_ecash};
     use core::pair::{load_pair, save_pair, AcceptMode};
-    use core::session::{Limits, Session, SessionState};
+    use core::session::{format_session, Limits, Session, SessionState};
 
     let _lock = match acquire_lock_gracefully("pair") {
         Some(l) => l,
@@ -445,18 +430,19 @@ fn run_earn(rate_sats_per_sec: u64, max_minutes: u32) -> Result<()> {
 
     println!("💰 GPU 貸出モード");
     println!("  レート: {} sats/秒", rate_sats_per_sec);
-    println!("  最大稼働: {} 分", max_minutes);
     println!("  受付モード: {}", mgr.config.accept_mode);
-    println!("  セッション ID: {}", core::short(&sess.id, 8));
-    if let Some(code) = &sess.verify_code {
-        println!("  🔢 確認コード: {}", code);
-    }
     println!();
 
-    // ecash 残高表示 (Apple 流: 関連情報を先に見せる)
+    // セッションの ID / 状態 / 確認コード / 上限は core::session::format_session が
+    // 単独で持つ (v1 の単純化で main.rs 側の手書き整形を削除 — pair/run と同じ扱い)。
+    print!("{}", format_session(&sess));
+    println!();
+
+    // ecash 状態表示 (Apple 流: 関連情報を先に見せる)。
+    // 空ウォレットでゼロだらけのダッシュボードを出さないため、残高がある時だけ。
     let ecash = load_ecash()?;
     if ecash.wallet.total_sats > 0 {
-        println!("  💳 ウォレット残高: {} sats", ecash.wallet.total_sats);
+        print!("{}", format_ecash(&ecash));
         println!();
     }
 

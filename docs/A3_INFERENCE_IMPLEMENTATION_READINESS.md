@@ -18,7 +18,7 @@
 
 **3 箇所すべて grep 確認済み。**
 
-### (a) `main.rs:400-403` — `run_inference` が計画を表示して終わる
+### (a) `main.rs:387-390` — `run_inference` が計画を表示して終わる
 
 ```rust
 capability_boundary!(
@@ -28,8 +28,8 @@ capability_boundary!(
 ```
 
 **コード自身が「next: 実 GPU 推論実行」と宣言している。ここが配線点。**
-直前 (`main.rs:377`) で `mgr.resolve(...)` から `ExecutionPlan` を受け取り、
-`main.rs:379-397` で内容を表示し、**実行せずに終わる**。
+直前 (`main.rs:378`) で `mgr.resolve(...)` から `ExecutionPlan` を受け取り、
+`main.rs:382` (`format_plan`) で内容を表示し、**実行せずに終わる**。
 
 ### (b) `main.rs:226` — デモが固定文字列を注入する
 
@@ -42,9 +42,9 @@ orch.step_demo_completed(&sampled)?;
 **`rope` 無引数デモの「推論」はここで完全にシミュレート**されている
 (README がその旨を明記済み)。
 
-### (c) `intent.rs:603` — `resolve()` が返す計画を誰も実行しない
+### (c) `intent.rs:574` — `resolve()` が返す計画を誰も実行しない
 
-`ExecutionPlan` (`intent.rs:396-408`) は `steps` / `selected_model_variant` /
+`ExecutionPlan` (`intent.rs:372-384`) は `steps` / `selected_model_variant` /
 `selected_provider` を持つが、**それを受け取って実行する主体が存在しない**。
 
 ---
@@ -99,7 +99,7 @@ orch.step_demo_completed(&sampled)?;
 | SSRF (借り手指定 URI) | **消滅** — URI を取る variant が無い |
 | pickle RCE (借り手指定 `base_model`) | **消滅** — 借り手はモデル名しか渡さず、**貸し手のローカルモデルを解決する** |
 | GPU side channel / CVE-2026-22164 | **残る** — ただし v1 は **GPU レベルの保護を提供しないと開示する** |
-| リソース枯渇 | **残る** — `max_output_tokens` (`intent.rs:129`) で上限、+ プロセスの rlimit |
+| リソース枯渇 | **残る** — `max_output_tokens` (`intent.rs:136`) で上限、+ プロセスの rlimit |
 
 ### 使う道具: pure Rust の隔離 crate
 
@@ -148,7 +148,7 @@ orch.step_demo_completed(&sampled)?;
 
 ### Step 3: `run_inference` の `capability_boundary!` を実呼び出しに置換
 
-- `main.rs:400-403` の macro を、`plan` から
+- `main.rs:387-390` の macro を、`plan` から
   `selected_model_variant` を取り出して Step 1/2 を呼ぶコードに置換。
 - **`capability_boundary!` を消す前に、次に何が未実装かを再宣言する**
   (例: `next: "リモートピアでの実行 (現状はローカル実行のみ)"`) —
@@ -177,7 +177,7 @@ orch.step_demo_completed(&sampled)?;
 | `Cargo.toml` | `mistralrs` + 隔離 crate を optional 依存で追加、`inference` feature | **中** — edition2024 汚染の再発リスク。`cargo add` 直後に即ビルド |
 | `src/net/inference.rs` (新規) | 推論の実呼び出し。**I/O 層** | 中 (新規コード、ただし独立してテスト可能) |
 | `src/net/mod.rs` | `#[cfg(feature = "inference")] pub mod inference;` | 低 |
-| `src/main.rs:400-403` | `capability_boundary!` → 実呼び出し | 中 (**唯一の到達点なので慎重に**) |
+| `src/main.rs:387-390` | `capability_boundary!` → 実呼び出し | 中 (**唯一の到達点なので慎重に**) |
 | `src/main.rs:226` | `sample_haiku_response()` → 実出力 | 中 (デモ経路。README の注記と連動) |
 | `src/core/intent.rs` | **変更不要** — `ExecutionPlan` はそのまま使える | — |
 | `src/core/session.rs` | `panic_stop` の隔離前提を更新 (Step 4) | 中 |
@@ -227,3 +227,24 @@ orch.step_demo_completed(&sampled)?;
 [`FIRST_PRINCIPLES_AUDIT.md`](FIRST_PRINCIPLES_AUDIT.md) §8 (最小充足条件の演繹) /
 [`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §2・§4j・§4l (crate 選定・隔離・形式制約) /
 [`SURPLUS_AND_GAPS.md`](SURPLUS_AND_GAPS.md) §1.10・§1.11 (同時に直す欠落)
+
+---
+
+## 追記 2026-08-18 — 行番号アンカーの再取得と、削除で先回りされた作業
+
+本書の `file:line` は `Workload::Train`/`Retrieve` 削除
+([`V1_SCOPE.md`](V1_SCOPE.md) §2 / [`SURPLUS_AND_GAPS.md`](SURPLUS_AND_GAPS.md)
+§1.11) と `format_plan` 結線に伴い**再取得済み** (上記本文に反映)。
+
+この 2 つの変更で、本書の作業の一部は**着手前に不要になった**:
+
+- **URI フェッチの防御 (SSRF / DNS ピン留め / IP 検証) は v1 では書かなくてよい。**
+  借り手が URI を渡す経路そのものが型から消えた。`Train` を v2 で戻す時に
+  §1.11 の要件がそのまま復活する。
+- **`rope run` の計画表示は `format_plan` に一本化済み。** A3 を結線する時に
+  触るのは `main.rs:387-390` の `capability_boundary!` だけでよく、表示整形を
+  書き足す必要はない。
+
+**残っている A9 の絶対条件は 1 つ**: `Inference.model` が bare `String` である
+こと (`intent.rs:134`)。名前から重みを解決する層が **SafeTensors/GGUF のみ受理**し、
+pickle を絶対に通さないこと。`SafeModelRef` newtype 化はここで行うのが自然。

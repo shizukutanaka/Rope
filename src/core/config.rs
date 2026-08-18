@@ -407,46 +407,6 @@ pub fn is_initialized() -> bool {
     config_path().exists() && private_key_path().exists()
 }
 
-/// 設定状態を 1 画面フォーマット
-///
-/// 他 6 モジュールと同じ format_* パターンに揃える。
-/// Apple の System Settings は全ペイン同じレイアウト — Rope も同じ。
-pub fn format_config(config: &Config) -> String {
-    let mut out = String::new();
-    out.push_str("設定:\n");
-    out.push_str("═══════════════════════════════════════════════════\n");
-    out.push_str(&format!("  ノード ID: {}\n", config.node.id));
-    out.push_str(&format!(
-        "  フィンガープリント: {}\n",
-        config.node.fingerprint
-    ));
-    out.push_str(&format!(
-        "  ネットワーク: {}\n",
-        config.security.allow_network
-    ));
-    out.push_str(&format!(
-        "  信頼済イメージのみ: {}\n",
-        if config.security.trusted_images_only {
-            "はい"
-        } else {
-            "いいえ"
-        }
-    ));
-    out.push_str(&format!(
-        "  最大温度: {}℃\n",
-        config.security.max_temperature
-    ));
-    out.push_str(&format!(
-        "  セッション上限: {} 分\n",
-        config.limits.default_time
-    ));
-    out.push_str(&format!(
-        "  VRAM 上限: {} MB\n",
-        config.limits.default_vram_mb
-    ));
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -495,56 +455,6 @@ mod tests {
         assert_ne!(config_path(), private_key_path());
         assert_ne!(private_key_path(), public_key_path());
         assert_ne!(session_dir(), log_dir());
-    }
-
-    #[test]
-    fn test_format_config_contains_key_fields() {
-        let config = Config {
-            node: NodeConfig {
-                id: "test-node-id".to_string(),
-                fingerprint: "fp:aa:bb:cc".to_string(),
-            },
-            security: SecurityConfig {
-                allow_network: NetworkMode::Limited,
-                trusted_images_only: true,
-                max_temperature: 85,
-            },
-            limits: DefaultLimits {
-                default_time: 120,
-                default_vram_mb: 8192,
-                default_gpu_util: 80,
-            },
-        };
-        let out = format_config(&config);
-        assert!(out.contains('═'), "ヘッダ罫線");
-        assert!(out.contains("test-node-id"), "ノード ID");
-        assert!(out.contains("fp:aa:bb:cc"), "フィンガープリント");
-        assert!(out.contains("制限"), "ネットワークモード");
-        assert!(out.contains("はい"), "信頼済イメージ");
-        assert!(out.contains("85℃"), "温度");
-        assert!(out.contains("120"), "セッション上限");
-    }
-
-    #[test]
-    fn test_format_config_trusted_images_no() {
-        let config = Config {
-            node: NodeConfig {
-                id: "n".into(),
-                fingerprint: "f".into(),
-            },
-            security: SecurityConfig {
-                allow_network: NetworkMode::None,
-                trusted_images_only: false,
-                max_temperature: 90,
-            },
-            limits: DefaultLimits {
-                default_time: 60,
-                default_vram_mb: 4096,
-                default_gpu_util: 80,
-            },
-        };
-        let out = format_config(&config);
-        assert!(out.contains("いいえ"));
     }
 
     #[test]

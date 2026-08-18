@@ -119,6 +119,13 @@ impl Intent {
 /// What work is being requested.
 ///
 /// Only a handful of verbs: Rope is not a general job scheduler.
+///
+/// **v1 スコープ** ([`docs/V1_SCOPE.md`] §2): 借り手が指定した URI やモデル
+/// ファイルを貸し手側でフェッチ・ロードするワークロードは v1 に入れない。
+/// `Train` (借り手指定 `dataset_uri` = SSRF 面 / 借り手指定 `base_model` =
+/// pickle RCE 面) と `Retrieve` (corpus 管理) を削除したことで、
+/// 「A9 の絶対条件」とした 2 つの制約が実装ではなく削除で満たされている。
+/// v2 で戻す場合の根拠は `docs/SURPLUS_AND_GAPS.md` §1.11 に残してある。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Workload {
@@ -127,19 +134,6 @@ pub enum Workload {
         model: String,
         prompt_tokens_est: u32,
         max_output_tokens: u32,
-    },
-    /// Fine-tuning or continued pretraining.
-    Train {
-        base_model: String,
-        dataset_uri: String,
-        method: TrainingMethod,
-        target_steps: u64,
-    },
-    /// RAG query over a document set.
-    Retrieve {
-        corpus_id: String,
-        query: String,
-        top_k: u32,
     },
     /// Batch inference job (many prompts).
     Batch {
@@ -184,14 +178,6 @@ impl Workload {
                     ComplexityClass::Large
                 }
             }
-            Workload::Train { target_steps, .. } => {
-                if *target_steps < 1_000 {
-                    ComplexityClass::Medium
-                } else {
-                    ComplexityClass::Large
-                }
-            }
-            Workload::Retrieve { .. } => ComplexityClass::Small,
             Workload::Agent { expected_turns, .. } => {
                 if *expected_turns < 10 {
                     ComplexityClass::Small
@@ -210,16 +196,6 @@ pub enum ComplexityClass {
     Small,
     Medium,
     Large,
-}
-
-/// Training-specific method selector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TrainingMethod {
-    LoraAdapter,
-    QloraAdapter,
-    FullFineTune,
-    ContinuedPretrain,
 }
 
 /// Spending ceiling with enforcement semantics.
@@ -564,11 +540,6 @@ impl IntentManager {
                     anyhow::bail!("モデル名が空");
                 }
             }
-            Workload::Train { base_model, .. } => {
-                if base_model.is_empty() {
-                    anyhow::bail!("ベースモデル名が空");
-                }
-            }
             _ => {}
         }
         let id = intent.id.clone();
@@ -776,8 +747,6 @@ impl IntentManager {
                     (model.clone(), false)
                 }
             }
-            Workload::Train { base_model, .. } => (base_model.clone(), false),
-            Workload::Retrieve { .. } => ("embed-small".to_string(), false),
             Workload::Agent { agent_id, .. } => (format!("agent-{}", agent_id), false),
         }
     }
@@ -1108,9 +1077,15 @@ pub fn save_intent(m: &IntentManager) -> Result<()> {
 }
 
 /// ExecutionPlan をターミナル表示用文字列に変換
+///
+/// `rope run` の実行計画表示はこの関数だけが持つ (main.rs 側の手書き整形は
+/// v1 の単純化で削除した — 同じものを 2 箇所で整形しない)。
 pub fn format_plan(plan: &ExecutionPlan) -> String {
     let mut out = String::new();
-    out.push_str("実行計画:\n");
+    out.push_str(&format!(
+        "実行計画 ({}):\n",
+        crate::core::short(&plan.id, 8)
+    ));
     out.push_str("═══════════════════════════════════════════════════════════\n");
     if !plan.feasible {
         out.push_str(&format!(
@@ -1593,19 +1568,19 @@ mod tests {
         assert!(steps.iter().any(|s| s.module == "kv_cache"));
     }
 
+    /// 非推論ワークロードには推論最適化を積まない (早期 return のガード)。
+    /// v1 で `Train`/`Retrieve` を削除したため、残る非推論ワークロードは `Agent`。
     #[test]
-    fn test_build_inference_steps_skip_for_training() {
+    fn test_build_inference_steps_skip_for_non_inference() {
         let i = Intent::new(
-            Workload::Train {
-                base_model: "llama".to_string(),
-                dataset_uri: "s3://data".to_string(),
-                method: TrainingMethod::LoraAdapter,
-                target_steps: 1000,
+            Workload::Agent {
+                agent_id: "a1".to_string(),
+                expected_turns: 5,
             },
             "test",
         );
         let (steps, opts, _, _) = IntentManager::build_inference_steps(&i, 0);
-        assert!(steps.is_empty(), "Training ワークロードには推論最適化不要");
+        assert!(steps.is_empty(), "非推論ワークロードには推論最適化不要");
         assert!(opts.is_empty());
     }
 
@@ -1668,22 +1643,6 @@ mod tests {
                 model: "".to_string(),
                 prompt_tokens_est: 10,
                 max_output_tokens: 100,
-            },
-            "user",
-        );
-        assert!(mgr.submit(intent).is_err());
-    }
-
-    /// 空ベースモデル名 (Train) → submit 拒否
-    #[test]
-    fn test_empty_base_model_rejected() {
-        let mut mgr = IntentManager::default();
-        let intent = Intent::new(
-            Workload::Train {
-                base_model: "".to_string(),
-                dataset_uri: "s3://data".to_string(),
-                method: TrainingMethod::FullFineTune,
-                target_steps: 1000,
             },
             "user",
         );

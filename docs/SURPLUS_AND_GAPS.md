@@ -25,6 +25,14 @@ full gate (`cargo build && cargo test --all-targets && cargo test --all-targets
 --all-targets --features http -- -D warnings && cargo fmt --all -- --check`)
 against HEAD before trusting anything past `830d8c4`.
 
+**The one gate that DOES work offline (re-verified 2026-08-18):** `rustfmt`
+ships with the toolchain and needs no registry, so
+`rustfmt --edition 2021 --check <files>` runs here. It is a **parser**, so it
+catches syntax errors and formatting drift — it does **not** type-check, borrow-check,
+or run tests. Use it on every edited file; it is strictly better than nothing and
+it is the only automated check available in this container. Do not upgrade what it
+proves: "rustfmt passes" ≠ "compiles".
+
 ---
 
 ## 1. GAPS (不足) — missing functionality, ranked by what blocks what
@@ -158,13 +166,34 @@ against HEAD before trusting anything past `830d8c4`.
   see §2.3). **Escalates to a real bearer-token-loss risk the moment real
   ecash gets wired to `rope run`/`rope earn`.**
 
-### 1.7 `format_confidential`/`format_ecash`/`format_plan`/`format_session`/`format_session_list`/`format_config` not surfaced to any verb `[OPEN, product/UX decision]`
-- 6 `format_*` functions exist and are tested; only `format_pair` is called
-  from `main.rs`. No `rope status`-style verb exists to surface the other 5.
-  Not a bug — no CLI surface was ever designed for it. Adding one is a
-  product decision (what would `rope status --verbose` show, does it need
-  to exist at all given the 4-verb minimalism principle in `README.md`
-  "設計原則" §2 Focus).
+### 1.7 `format_*` not surfaced to any verb `[RESOLVED 2026-08 — 3 wired, 2 deleted, 1 deferred]`
+- **Original finding**: 6 `format_*` functions existed and were tested; only
+  `format_pair` was called from `main.rs`. No `rope status`-style verb existed
+  to surface the other 5. Not a bug — no CLI surface was ever designed for it,
+  and adding a 5th verb conflicts with the 4-verb minimalism principle
+  (`README.md` "設計原則" §2 Focus).
+- **Resolution (v1 単純化, ステップ③)**: rather than adding a verb, the
+  decision was taken per formatter — **display belongs to exactly one place**:
+  - **Wired into the existing verbs** (each replaced a hand-rolled duplicate of
+    the same formatting in `main.rs`, so this is a deletion of duplication, not
+    an addition of surface):
+    - `format_plan` → `rope run` (replaced `main.rs` の手書き整形 20 行;
+      the plan's steps / model variant / latency / energy are now visible,
+      which the hand-rolled block never showed)
+    - `format_session` → `rope earn` (replaced the hand-rolled ID / verify-code
+      / max-minutes lines)
+    - `format_ecash` → `rope earn` (replaced the hand-rolled balance line;
+      kept behind the existing `total_sats > 0` gate so an empty wallet does
+      not print a screen of zeros)
+  - **Deleted**: `format_config`, `format_session_list` — no verb, no axiom,
+    no consumer. `list_sessions` (the data API behind the latter) is kept.
+  - **Deferred, deliberately not deleted**: `format_confidential` — it belongs
+    to the A6/TEE subsystem, which `V1_SCOPE.md` defers *wholesale* to v2.
+    Deleting one formatter out of a subsystem that is being deferred intact
+    would be arbitrary churn.
+- ⚠️ **コンパイラ未検証** — this change was made in the build-blocked
+  environment (§0). Verified by grep (zero remaining references) and by
+  `rustfmt --check` (parses); **not** type-checked or tested.
 - Related: 7 QR/TOFU-related `pair::PairStats` fields (`tofu_accepts`,
   `pubkey_mismatch_rejections`, `qr_tokens_issued/consumed/expired`,
   `qr_hmac_rejections`, `qr_nonce_replays_blocked`) are tested but not
@@ -277,7 +306,27 @@ against HEAD before trusting anything past `830d8c4`.
     weakens the borrower's funds. The "don't refund completed work"
     condition is what resolves it.
 
-### 1.11 A9 hard constraints for the A3 wiring — model format and URI fetching `[OPEN, must be satisfied when A3+A9 land]`
+### 1.11 A9 hard constraints for the A3 wiring — model format and URI fetching `[PARTLY SATISFIED BY DELETION 2026-08-18; the remaining half is still OPEN]`
+
+> **Update 2026-08-18 — the URI half is closed by deletion, not by code.**
+> `Workload::Train` and `Workload::Retrieve` (and the now-orphaned
+> `TrainingMethod` enum) were **deleted** from `intent.rs` per
+> [`V1_SCOPE.md`](V1_SCOPE.md) §2. With them went `dataset_uri` — the only
+> borrower-supplied URI in the whole type surface — and `base_model`, the only
+> borrower-supplied *weights* reference. So of the two hard constraints below:
+> - **URI fetching / SSRF / DNS pinning: no longer reachable in v1.** There is
+>   nothing left for the lender to fetch. The constraint returns verbatim if
+>   `Train` is restored in v2 — which is why the analysis below is kept intact
+>   rather than deleted with the code.
+> - **Model format (SafeTensors/GGUF only, never pickle): STILL OPEN.**
+>   `Workload::Inference.model` is still a bare `String` (`intent.rs:133-137`)
+>   and A3 must resolve it to weights. The `SafeModelRef` newtype idea below
+>   applies unchanged.
+>
+> ⚠️ **コンパイラ未検証** (§0): the deletion was verified by grep (zero
+> remaining references outside doc comments) and `rustfmt --check`; not
+> type-checked or tested.
+
 - From the 2026 threat research
   ([`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §4l). These are
   not preferences; they are what A9 (lender protection) requires once the
@@ -390,10 +439,14 @@ against HEAD before trusting anything past `830d8c4`.
   currently executes on any real CLI path.
 
 ### 2.4 `session.rs` cluster — ambiguous, explicitly not resolved `[BLOCKED:decision]`
-- 10 of 25 `pub fn` in `src/core/session.rs` have zero callers anywhere,
+- 10 of 25 `pub fn` in `src/core/session.rs` had zero callers anywhere,
   including tests: `SessionManager::end`, `panic_stop`, `is_stop_requested`,
   `get_status`, `cleanup`, `list_sessions`, `format_session_list`,
   `Session::load`/`delete`, `reset_stop_flag`.
+  **2026-08-18**: `format_session_list` deleted, and `format_session` — which
+  was in the same unreached set — is now wired into `rope earn` (§1.7).
+  The remaining 9 are unchanged: they are the A9 emergency-stop cluster and
+  its supporting API, which `V1_SCOPE.md` keeps because A9 is *in* v1.
 - Read individually this session (`docs/REACHABILITY_AUDIT.md`): `panic_stop`
   (`session.rs:343-365`) is a carefully engineered emergency-stop path with
   an explicit historical bug-fix doc comment (old version gave up entirely
