@@ -84,7 +84,44 @@ compiles", and emphatically ≠ "it works".** CI remains the shipping gate.
   do this without explicit sign-off. secp256k1 has no such shortcut available
   in already-vendored deps.
 
-### 1.2 No real P2P I/O `[BLOCKED:build]`
+### 1.2 No real P2P I/O `[PARTLY RESOLVED 2026-08-18 — discovery is real; transport is not]`
+
+> **`src/net/mdns.rs` opens real UDP multicast sockets.** `rope pair` now sends a
+> `_rope._tcp.local` PTR query to 224.0.0.251:5353, answers other peers' queries,
+> parses the responses, and feeds them into `PairManager::record_discovery` —
+> which this document previously listed as never called from anywhere.
+> **11 tests, run for real in this container**, including a two-socket
+> discovery over actual multicast.
+>
+> **The requirement that was wrong**: `P2P_IMPLEMENTATION_READINESS.md` framed A1
+> as blocked on adding Iroh or libp2p. Those buy **NAT traversal, relays and
+> QUIC** — and `V1_SCOPE.md` §2 already **deleted NAT traversal from v1**.
+> What LAN discovery actually needs is the DNS-SD wire format and a UDP
+> multicast socket, both of which `std::net` has.
+>
+> **Design notes worth keeping**:
+> - Binds **5353 if free, otherwise an ephemeral port**. Multicast delivery is by
+>   *destination port*, so an ephemeral-bound socket cannot receive announcements
+>   sent to :5353 — it can only get unicast replies. Hence the QU bit (RFC 6762
+>   §5.4) on our query, and the honest report when we could not become a
+>   responder ("こちらからは探せるが、相手からは見つからない").
+> - Discovery and answering share **one socket and one loop** — mDNS is
+>   symmetric, so no threads and no async runtime are needed.
+> - The parser treats every packet as hostile: bounds-checked reads, a
+>   compression-pointer jump limit, record/name/label caps, and unknown records
+>   discarded rather than erroring. Fuzz-ish tests feed it 2,000 random buffers
+>   and every truncation of a valid packet; none panic.
+>
+> **What is still missing — and it is the important half**: there is **no
+> transport**. Nothing is encrypted, nothing is authenticated, and **no job,
+> prompt or payment crosses the network**. mDNS advertises what AirDrop and a
+> network printer advertise: that this host runs Rope, plus a public key. The
+> next step is the Noise handshake, which `docs/SURPLUS_AND_GAPS.md` §1.1
+> explicitly says must not be hand-rolled without sign-off. **Until then Rope
+> discovers peers but cannot talk to them**, and `rope run` still executes
+> locally.
+
+**Original finding, kept for context:**
 - `src/core/pair.rs` — mDNS/Bluetooth/DHT discovery and the Noise handshake
   are pure state machines. Zero sockets opened anywhere in `core::pair`.
 - `main.rs::run_pair` (`src/main.rs:256-305`) never calls `record_discovery`/

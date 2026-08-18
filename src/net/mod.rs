@@ -9,6 +9,8 @@
 //! ## モジュール
 //! - `cashu_mint` — Cashu protocol HTTP クライアント
 //! - `inference`  — A3: 実際に推論を実行する層 (依存ゼロ・CPU)
+//! - `mdns`       — A1: LAN のピアを実際に見つける層 (依存ゼロ・UDP マルチキャスト)
 
 pub mod cashu_mint;
 pub mod inference;
+pub mod mdns;

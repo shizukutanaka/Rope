@@ -110,7 +110,7 @@ rustc --edition "$EDITION" --crate-type bin --crate-name rope_bin \
     --emit=metadata "$ROOT/src/main.rs" \
     --extern rope="$OUT/librope.rlib" --extern clap="$OUT/libclap.rlib" \
     --extern clap_derive_shim="$OUT/libclap_derive_shim.so" \
-    --extern anyhow="$OUT/libanyhow.rlib" \
+    "${EXTERNS[@]}" \
     -L "$OUT" --out-dir "$OUT" || status=1
 
 echo
@@ -119,7 +119,7 @@ rustc --edition "$EDITION" --test --crate-name rope_bin_tests \
     --emit=metadata "$ROOT/src/main.rs" \
     --extern rope="$OUT/librope.rlib" --extern clap="$OUT/libclap.rlib" \
     --extern clap_derive_shim="$OUT/libclap_derive_shim.so" \
-    --extern anyhow="$OUT/libanyhow.rlib" \
+    "${EXTERNS[@]}" \
     -L "$OUT" --out-dir "$OUT" || status=1
 
 echo

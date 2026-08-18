@@ -322,13 +322,110 @@ fn run_pair(accept_mode: &str) -> Result<()> {
     }
     println!();
 
+    // A1: 実際に LAN を探す。ここから先は本物の UDP マルチキャスト。
+    let found = discover_lan_peers(&mut mgr, DISCOVERY_WINDOW)?;
+    println!();
+
     save_pair(&mgr)?;
     println!("{}", format_pair(&mgr));
 
+    if found == 0 {
+        capability_boundary!(
+            working: "実 mDNS 探索 (ピアは見つからず) + verify code + 信頼ストア",
+            next: "Noise 鍵交換とジョブ転送 (発見の次段。まだ暗号化されない経路は作らない)"
+        );
+    }
     capability_boundary!(
-        working: "Pair state machine + verify code 生成 + 信頼ストア",
-        next: "実 mDNS / Bluetooth スキャン (mdns-sd + btleplug)"
+        working: "実 mDNS 探索でピアを発見 + verify code + 信頼ストア",
+        next: "Noise 鍵交換とジョブ転送 (発見はできたが、まだ安全に話せない)"
     );
+}
+
+/// LAN 探索に使う時間。AirDrop 的な体感を壊さない範囲で。
+const DISCOVERY_WINDOW: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// mDNS で LAN のピアを探し、見つかった分を `PairManager` に記録する。
+///
+/// 返り値は**新たに記録できたピア数**。探索そのものが失敗しても
+/// (マルチキャスト不可の環境等)、`rope pair` を止める理由にはしない。
+fn discover_lan_peers(
+    mgr: &mut core::pair::PairManager,
+    window: std::time::Duration,
+) -> Result<u32> {
+    use core::pair::{DiscoveryMethod, PeerCapabilities};
+    use rope::net::mdns::{Advertisement, Mdns};
+
+    let cfg: core::config::Config =
+        core::config::load_or_recover(&core::config::config_path(), "config");
+    let pubkey = core::config::load_public_key()
+        .map(|k| hex::encode(k.to_bytes()))
+        .unwrap_or_default();
+    if pubkey.is_empty() {
+        println!("🔍 LAN 探索をスキップ (公開鍵が未生成)");
+        return Ok(0);
+    }
+
+    let instance = std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_else(|_| "rope".to_string());
+    let adv = Advertisement {
+        instance,
+        // 待ち受けポートは Noise 実装時に確定する。今は広告するだけで listen しない。
+        port: 0,
+        node_id: cfg.node.id.clone(),
+        fingerprint: cfg.node.fingerprint.clone(),
+        pubkey,
+    };
+
+    let sock = match Mdns::open() {
+        Ok(s) => s,
+        Err(e) => {
+            println!("🔍 LAN 探索をスキップ ({})", e);
+            return Ok(0);
+        }
+    };
+    println!("🔍 LAN を探索中… ({} ms)", window.as_millis());
+    let result = match sock.discover(Some(&adv), window, &cfg.node.id) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("🔍 LAN 探索を中断 ({})", e);
+            return Ok(0);
+        }
+    };
+    if !result.responder {
+        println!("   (ポート 5353 が使用中 — こちらからは探せるが、相手からは見つからない)");
+    }
+
+    let mut recorded = 0u32;
+    for p in &result.peers {
+        if p.pubkey.is_empty() {
+            continue; // 鍵を名乗らないピアは TOFU に載せられない
+        }
+        let addr = match p.addr {
+            Some(a) => std::net::SocketAddr::from((a, p.port)),
+            None => continue,
+        };
+        let caps = PeerCapabilities {
+            protocol_version: "mdns/1".to_string(),
+            ..Default::default()
+        };
+        match mgr.record_discovery(&p.instance, &p.pubkey, addr, DiscoveryMethod::Mdns, caps) {
+            Ok(_) => {
+                recorded += 1;
+                println!(
+                    "   ✅ {} ({}) fp={}",
+                    p.instance,
+                    addr,
+                    core::short(&p.fingerprint, 16)
+                );
+            }
+            Err(e) => println!("   ⚠️  {} を記録できず ({})", p.instance, e),
+        }
+    }
+    if result.peers.is_empty() {
+        println!("   ピアは見つかりませんでした。");
+    }
+    Ok(recorded)
 }
 
 // ============================================================================
