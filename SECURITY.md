@@ -7,6 +7,53 @@ Rope は「他人の GPU を安全に借りる」ことを謳うが、**現時�
 以下を必ず把握すること。詳細な技術的根拠は [`docs/ASSESSMENT.md`](docs/ASSESSMENT.md)
 および [`docs/RESEARCH_IMPROVEMENTS.md`](docs/RESEARCH_IMPROVEMENTS.md) を参照。
 
+---
+
+## 🎯 v1 のセキュリティモデル (2026-08 スコープ決定)
+
+[`docs/V1_SCOPE.md`](docs/V1_SCOPE.md) で v1 の要件を確定させた結果、
+**v1 が提供しないものが明確になった**。以下は「未完成」ではなく
+**v1 の設計上の境界**である (v2 へ延期)。
+
+### v1 は機密計算 (Confidential Compute) を提供しない
+
+- **`Privacy::ConfidentialCompute` と TEE attestation は v1 のスコープ外。**
+  消費者 GPU に CC が存在しない (下記 W4 と同じ理由) ため、
+  「他人の GPU で秘匿する」は v1 では成立しない。
+- → **v1 では、貸し手はプロンプトと出力を見ることができる。**
+  機微なデータを v1 の Rope で他人の GPU に送ってはならない。
+- これは実装の遅れではなく、**成立しない約束を降ろした**もの。
+  v2 で戻す際の根拠は [`docs/RESEARCH_UPDATE_2026-08.md`](docs/RESEARCH_UPDATE_2026-08.md) §4 にある。
+
+### v1 の貸し手保護はプロセスレベルのみ — GPU レベルは保護しない
+
+- 借り手のワークロードは**プロセス隔離**下で実行される (namespace / seccomp /
+  Landlock 系)。しかし **GPU レベルの攻撃面は保護されない**:
+  - GPU デバイスノード経由の権限昇格 (例: CVE-2026-22164)
+  - 同一 GPU を共有するプロセス間の side channel (実行パターン・
+    メモリアクセス時間・キャッシュ挙動からの推定)
+- GPU 呼び出しに介在できるのは gVisor + nvproxy だが、**導入が必要でゼロコンフィグを
+  壊す**ため v1 では採らない ([`docs/RESEARCH_UPDATE_2026-08.md`](docs/RESEARCH_UPDATE_2026-08.md) §4j)。
+- → **貸し手は「GPU レベルでは無防備」であることを理解した上で貸すこと。**
+
+### v1 は借り手指定の URI をフェッチせず、借り手指定の重みをロードしない
+
+- `Workload::Train` / `Retrieve` は **v1 から削除**された。
+  借り手が渡すのは**プロンプトとモデル名のみ**で、モデル名は
+  **貸し手側の allowlist で解決される**。
+- 結果として **SSRF 面と pickle デシリアライズ RCE 面が構造的に存在しない**
+  ([`docs/SURPLUS_AND_GAPS.md`](docs/SURPLUS_AND_GAPS.md) §1.11 が挙げた 2 つの脅威は、
+  防御ではなく**機能の削除**によって消えている)。
+- モデル形式は **SafeTensors / GGUF に限定**する (pickle/`torch.load` は使わない)。
+
+### v1 は実行結果を検証しない
+
+- **A4 (proof-of-execution) は v1 のスコープ外。** 借り手は「本当にそのモデルが
+  走ったか」を暗号学的に確認できない。escrow の deadman 返金が唯一の保護。
+- LAN 上の相手であることが実質的な緩和になっている前提の設計。
+
+---
+
 ### 実際に暗号学的に機能しているもの
 
 | コンポーネント | 実装 | 場所 |
