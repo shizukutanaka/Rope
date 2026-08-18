@@ -165,6 +165,12 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Added
 
+- **初回デモ (`rope`) もモデルがあれば実推論になる** — `A3_INFERENCE_...READINESS.md`
+  の配線点 (b) (`main.rs` の `sample_haiku_response`) を解消。
+  モデルが置いてあれば `run_local_inference` の結果を表示し、無ければ従来の
+  固定 haiku に落ちる。**どちらだったかを出力直後に必ず 1 行で表示する** —
+  「動くフリをしない」(規範6) をデモにも適用した。README の説明も差し替え
+
 - **🎯 A3: 推論を実際に実行する — `src/net/inference.rs`** (依存ゼロ / CPU / f32)。
   **`rope run` は固定文字列を返すのをやめ、本物の Transformer を走らせる。**
   **テスト 22 件はこの環境で実際に実行・PASS している** (型検査だけではない)。

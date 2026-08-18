@@ -151,6 +151,12 @@ fn run() -> Result<()> {
 // rope (無引数) — first_run 60秒 wow moment
 // ============================================================================
 
+/// 初回デモで使うモデル名とプロンプト。
+///
+/// モデルが未配置なら用意した応答に落ちる (規範6: どちらだったかは必ず表示する)。
+const FIRST_RUN_DEMO_MODEL: &str = "demo";
+const FIRST_RUN_DEMO_PROMPT: &str = "Write a haiku about borrowing a stranger's GPU.";
+
 fn run_first_run() -> Result<()> {
     use core::confidential::{load_confidential, save_confidential};
     use core::ecash::{load_ecash, save_ecash};
@@ -221,9 +227,19 @@ fn run_first_run() -> Result<()> {
     let _intent = orch.step_build_intent()?;
     println!("{}", orch.first_run.progress_line());
 
-    // Apple 流: デモは堂々と見せる。ラベル付けない。
-    // iPhone のデモは pre-scripted だったが Jobs は「プレースホルダ」と言わなかった。
-    let sampled = orch.first_run.sample_haiku_response().to_string();
+    // モデルが置いてあれば**本当に推論する**。無ければ用意した応答を見せる。
+    //
+    // Apple 流: デモは堂々と見せる。ラベル付けない。iPhone 初代のデモは
+    // pre-scripted だったが Jobs は「プレースホルダ」と言わなかった。
+    // ただし Rope の規範6 は「動くフリをしない」— なので**実行できる時は
+    // 必ず実行し**、できない時だけ用意した応答に落ちる。どちらだったかは
+    // 下の 1 行で利用者に分かるようにする。
+    let (sampled, was_real) = match run_local_inference(FIRST_RUN_DEMO_MODEL, FIRST_RUN_DEMO_PROMPT)
+    {
+        Ok(Some(c)) => (c.text, true),
+        // モデル未配置・壊れたモデル等はデモを止める理由にならない
+        Ok(None) | Err(_) => (orch.first_run.sample_haiku_response().to_string(), false),
+    };
     orch.step_demo_completed(&sampled)?;
     println!("{}", orch.first_run.progress_line());
 
@@ -232,6 +248,16 @@ fn run_first_run() -> Result<()> {
         println!();
         for line in sampled.lines() {
             println!("{}", line);
+        }
+        println!();
+        if was_real {
+            println!("  ↑ このテキストは今このマシンで計算されたものです。");
+        } else {
+            println!(
+                "  ↑ これは用意された応答です ({} にモデルが未配置)。",
+                model_dir().display()
+            );
+            println!("     `rope run` の説明どおりモデルを置くと、ここも実推論になります。");
         }
     }
 
