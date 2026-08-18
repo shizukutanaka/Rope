@@ -22,9 +22,16 @@
    `cargo build`/`test`/`clippy` が `static.crates.io` の 403 で**そもそも動かない
    ことがある** ([`docs/SURPLUS_AND_GAPS.md`](docs/SURPLUS_AND_GAPS.md) §0)。
    - **セッション開始時に一度だけ** ビルド可否を確認する (ただし何度もポーリングしない)。
+   - **ビルド不能でも型検査はできる** (2026-08-18〜):
+     ```sh
+     tools/offline-typecheck/check.sh   # src/ 全体を rustc に通す・約 2.5 秒
+     ```
+     crates.io 不要。**「コンパイラ無しで消すのは怖い」はもう理由にならない。**
+     限界は [`tools/offline-typecheck/README.md`](tools/offline-typecheck/README.md)
+     を必ず読むこと (`cargo test`/`clippy`/MSRV/暗号の代用にはならない)。
    - **ビルド不能なら**: コード変更は「コンパイラ未検証」を CHANGELOG とコミット
-     メッセージに必ず明記する。入念な手動レビュー (型・借用・参照解決・clippy lint の
-     目視) で代替し、公開済みリリースに未検証コードを積み増すのは慎重に判断する。
+     メッセージに必ず明記する。ハーネスを通した場合は「型検査のみ実施」と
+     区別して書く。公開済みリリースに未検証コードを積み増すのは慎重に判断する。
 
 3. **ブランチとリリース**:
    - デフォルトブランチ = `claude/deepresearch-ultrathink-improve-wnYtn`
@@ -115,11 +122,24 @@ W7 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashManag
 
 1. **未検証の明記**: ビルド不能環境での全コード変更は「コンパイラ未検証」を
    CHANGELOG `[Unreleased]` とコミットメッセージに明記する (例外なし)。
-   **ただし何も検証しないのとは違う**: `rustfmt` は toolchain 同梱で registry を
-   使わないため**この環境でも動く**。`src/` を触ったら必ず
-   `rustfmt --edition 2021 --check <触ったファイル>` を通すこと。
-   **構文エラーと整形ずれは捕まるが、型検査・借用検査・テストは一切されない** —
-   「rustfmt が通った」を「コンパイルできる」と言い換えないこと (規範6)。
+   **ただし何も検証しないのとは違う。`src/` を触ったら必ず以下 2 つを通すこと**:
+
+   ```sh
+   rustfmt --edition 2021 --check <触ったファイル>   # 構文・整形
+   tools/offline-typecheck/check.sh                 # 型検査 (約 2.5 秒)
+   ```
+
+   後者は `src/` の **100% (lib + bin + テスト本体) を rustc に通す** —
+   crates.io 不要。網羅性漏れ (E0004)・型不一致 (E0308)・未定義名 (E0425)・
+   借用エラー (E0382) を検出する (`selftest.sh` が毎回それを実証する)。
+   **これで「コンパイラ無しで削除するのは怖い」という制約は解けている。**
+
+   ⚠️ **ただし `cargo check` の代用であって `cargo test`/`clippy`/`build` では
+   ない。** スタブと実 crate のシグネチャ差・serde の derive 境界・`json!` の
+   中身・clap の引数仕様・`--features http`・**MSRV 1.75 適合**・実行時挙動・
+   暗号的性質は一切検証されない。限界の全文は
+   [`tools/offline-typecheck/README.md`](tools/offline-typecheck/README.md)。
+   「ハーネスが通った」を「ビルドできる」「動く」と言い換えないこと (規範6)。
 2. **単独レビューを過信しない**: 実例として、`perform_attestation` に `update_stats()` を
    丸ごと配線した変更が `active_sessions` を 0 に巻き戻す回帰を生み、**単独レビューでは
    見逃し、Workflow の多エージェント敵対的レビューでのみ検出された** (commit `66383b9`)。

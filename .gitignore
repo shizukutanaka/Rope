@@ -17,3 +17,6 @@ Thumbs.db
 /data/
 *.bak
 
+
+# オフライン型検査ハーネスの中間生成物
+tools/offline-typecheck/.build/

@@ -25,13 +25,37 @@ full gate (`cargo build && cargo test --all-targets && cargo test --all-targets
 --all-targets --features http -- -D warnings && cargo fmt --all -- --check`)
 against HEAD before trusting anything past `830d8c4`.
 
-**The one gate that DOES work offline (re-verified 2026-08-18):** `rustfmt`
-ships with the toolchain and needs no registry, so
-`rustfmt --edition 2021 --check <files>` runs here. It is a **parser**, so it
-catches syntax errors and formatting drift — it does **not** type-check, borrow-check,
-or run tests. Use it on every edited file; it is strictly better than nothing and
-it is the only automated check available in this container. Do not upgrade what it
-proves: "rustfmt passes" ≠ "compiles".
+**⚠️ 2026-08-18 — the paragraph above is still true about `cargo`, but the
+conclusion drawn from it ("nothing can be verified here") is no longer true.**
+
+Two gates now run offline:
+
+1. **`rustfmt --edition 2021 --check <files>`** — ships with the toolchain, needs
+   no registry. A **parser**: catches syntax errors and formatting drift only.
+2. **`tools/offline-typecheck/check.sh`** — **type-checks 100% of `src/`
+   (lib + bin + all test bodies) in ~2.5 seconds**, with no network.
+   `src/lib.rs`'s entire external surface is 8 crates / ~30 items, so those
+   items are replaced by hand-written stubs in `tools/offline-typecheck/shims/`;
+   `proc_macro` is bundled with rustc, so even `#[derive(Serialize)]` and
+   `#[derive(Parser)]` are stubbable. It catches non-exhaustive matches
+   (E0004), type/arity errors (E0308), unresolved names (E0425/E0433), and
+   borrow/move errors (E0382) — `tools/offline-typecheck/selftest.sh` proves
+   this by injecting each class and asserting it is caught, so the harness
+   cannot silently rot into a vacuous pass.
+
+**What this changes for the codebase**: HEAD **type-checks** as of 2026-08-18.
+Every commit after `830d8c4` had been accumulating as "manual-review-only";
+they are now type-verified, subject to the limits below.
+
+**What it does NOT change — read
+[`tools/offline-typecheck/README.md`](../tools/offline-typecheck/README.md)
+before relying on a PASS.** It is a `cargo check` substitute, not `cargo test`,
+not `cargo clippy`, not `cargo build`. It cannot see: shim-vs-real signature
+drift, serde's per-field derive bounds, `json!` contents, clap argument specs,
+the `--features http` path, MSRV-1.75 compatibility (the local rustc is 1.94),
+clippy lints, any runtime behaviour, or anything cryptographic (the crypto
+stubs return zeros and always verify Ok). **"The harness passes" ≠ "it
+compiles", and emphatically ≠ "it works".** CI remains the shipping gate.
 
 ---
 
