@@ -97,7 +97,38 @@ compiles", and emphatically ≠ "it works".** CI remains the shipping gate.
   integration code once §0 is resolved (dependency versions, AutoNAT/DCUtR
   config snippets).
 
-### 1.3 No proof-of-execution / verification engine `[OPEN, not blocked by §0]`
+### 1.3 No proof-of-execution / verification engine `[PARTLY RESOLVED 2026-08-18 — execution now exists; verification still OPEN]`
+
+> **The blocking half is gone.** This entry's own conclusion was that
+> verification could not start because **nothing executed** — "no inference
+> engine is integrated at all … the single largest genuinely-unstarted gap".
+> That is no longer true.
+>
+> `src/net/inference.rs` (2026-08-18) is a **real transformer inference engine**:
+> RMSNorm, RoPE, grouped-query attention with a KV cache, SwiGLU FFN, and
+> temperature/top-p sampling, reading llama2.c legacy-v1 checkpoints. It has
+> **zero external dependencies**, which is why it exists at all in this
+> container — and it means **its 22 tests actually run here**, unlike the rest
+> of the crate (§0).
+>
+> **The requirement that was wrong**: `A3_INFERENCE_IMPLEMENTATION_READINESS.md`
+> said A3 was blocked on adding mistral.rs. mistral.rs supplies GPU kernels,
+> quantization formats and speed — **not the capability to execute**. A
+> transformer forward pass is arithmetic, and `std`'s f32 ops are enough.
+>
+> **What is now true**: `rope run <model>` executes a real model on the CPU if
+> the lender has placed a checkpoint in `~/.rope/models` (or `ROPE_MODEL_DIR`),
+> and says so honestly if not.
+> **What is still not true**: the computation runs *locally*. "Someone else's
+> GPU" needs A1 (mDNS/Noise) and A5 (ecash wiring), both still blocked by §0.
+> And it is CPU f32, not GPU.
+>
+> **Verification (A4) remains OPEN** — but it is no longer blocked *by absence
+> of execution*. `Completion.forward_passes` was added specifically as the
+> beginning of an answer to the Hollow-LLM "effort gap" (§1): it records how
+> much compute was actually spent, which is the quantity that attack exploits.
+
+**Original finding, kept for context:**
 - `src/core/intent.rs` `VerificationLevel` enum exists; nothing implements it.
 - `src/core/ecash.rs` escrow's `proof_satisfies` only checks a commitment-hash
   match — a lazy/malicious worker can return output with a matching hash

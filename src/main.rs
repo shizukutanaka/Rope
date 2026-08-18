@@ -384,10 +384,80 @@ fn run_inference(
 
     save_intent(&mgr)?;
 
-    capability_boundary!(
-        working: "Intent → ExecutionPlan 構築 (型安全な準備状態)",
-        next: "実 GPU 推論実行 (cashu_mint + Noise 結線)"
-    );
+    // A3: ここから先は実際に計算する。モデルが無ければ「無い」と言う (規範6)。
+    match run_local_inference(model, prompt)? {
+        Some(c) => {
+            println!("{}", c.text);
+            println!();
+            println!(
+                "  ({} プロンプトトークン → {} 生成トークン / forward {} 回 / 停止: {:?})",
+                c.prompt_tokens, c.output_tokens, c.forward_passes, c.stop_reason
+            );
+            println!();
+            Ok(())
+        }
+        None => {
+            println!(
+                "ℹ️  ローカルモデルが見つかりません: {}",
+                model_dir().display()
+            );
+            println!(
+                "   `{}.bin` と `tokenizer.bin` (llama2.c 形式) を置くと、",
+                model
+            );
+            println!("   この 4 動詞の中で実際に推論が走ります。");
+            capability_boundary!(
+                working: "Intent → ExecutionPlan → ローカル推論 (モデル未配置のため未実行)",
+                next: "ピアへのオフロード (mDNS + Noise + ecash 結線)"
+            );
+        }
+    }
+}
+
+/// 貸し手がモデルを置く場所。**借り手はここに影響できない** (A9)。
+///
+/// `ROPE_MODEL_DIR` で上書きできるが、これは貸し手の環境変数であって
+/// 借り手が送れる値ではない。
+fn model_dir() -> std::path::PathBuf {
+    match std::env::var_os("ROPE_MODEL_DIR") {
+        Some(d) => std::path::PathBuf::from(d),
+        None => core::config::config_dir().join("models"),
+    }
+}
+
+/// ローカルモデルで推論を実行する。
+///
+/// モデルが配置されていなければ `Ok(None)` — **失敗ではなく「まだ無い」**。
+/// 壊れたモデルや上限超過は `Err` で、理由をそのまま利用者に見せる。
+fn run_local_inference(
+    model: &str,
+    prompt: &str,
+) -> Result<Option<rope::net::inference::Completion>> {
+    use rope::net::inference::{
+        safe_model_stem, CheckpointLimits, CpuEngine, ExecutionLimits, InferenceEngine, Sampler,
+    };
+
+    // モデル名は外から来た文字列として扱う (パス結合の前に必ず無害化する)
+    let stem = safe_model_stem(model).map_err(|e| anyhow::anyhow!("{}", e))?;
+    let dir = model_dir();
+    let model_path = dir.join(format!("{}.bin", stem));
+    let tokenizer_path = dir.join("tokenizer.bin");
+    if !model_path.exists() || !tokenizer_path.exists() {
+        return Ok(None);
+    }
+
+    println!("🧮 ローカル推論を実行中 ({})…", model_path.display());
+    let engine = CpuEngine::load(&model_path, &tokenizer_path, CheckpointLimits::default())
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let limits = ExecutionLimits {
+        max_prompt_tokens: 2048,
+        max_output_tokens: 256,
+    };
+    // seed は固定。同じプロンプトで同じ出力になる方が、この段階では検証しやすい。
+    let completion = engine
+        .generate(prompt, limits, Sampler::default(), 0x526F7065)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    Ok(Some(completion))
 }
 
 // ============================================================================

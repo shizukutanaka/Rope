@@ -11,9 +11,15 @@
 
 ## 0. 最初に確認すること (Orientation)
 
-1. **この製品の実態**: Rope は「状態機械としては完成しているが、エンドツーエンドでは
-   動かないスケルトン」。実 P2P 通信・実暗号 (Noise/BDHKE)・実 TEE attestation 検証・
-   実 GPU 推論は**まだ配線されていない** (QR ペアリングの blake3 keyed-MAC だけ本物)。
+1. **この製品の実態** (2026-08-18 更新): Rope は「状態機械 + **実際に動く推論エンジン**が
+   あるが、まだネットワーク越しには動かない」段階。
+   - ✅ **推論は本物** — `src/net/inference.rs` が依存ゼロの Transformer を **CPU で**
+     実行する。テスト 22 件が**この環境で実際に走る** (crate 全体は `cargo test` 不可)。
+   - ❌ 実 P2P 通信・実暗号 (Noise/BDHKE)・実 TEE attestation 検証は**まだ配線されて
+     いない** (QR ペアリングの blake3 keyed-MAC だけ本物)。
+   - ❌ **GPU ではない**。CPU f32。GPU は `InferenceEngine` を実装すれば足せる。
+   - ⚠️ したがって **「他人の GPU を借りる」はまだ成立していない** — 計算は自分の
+     マシンで走る。残るのは A5 (ecash 結線) と A1 (mDNS/Noise)。
    これは隠れた欠陥ではなく意図的に開示された現状 → [`SECURITY.md`](SECURITY.md),
    [`docs/ASSESSMENT.md`](docs/ASSESSMENT.md)。README 冒頭のデモも「シミュレーション」
    と明記済み。
@@ -70,7 +76,7 @@
 |---|------|------|
 | W1 | 実 I/O が皆無 (Noise/mDNS/DHT/BDHKE/NRAS すべてモデルのみ)。唯一の実 I/O は `http` の Cashu mint DTO | `SURPLUS_AND_GAPS.md` §1.1, §1.2 |
 | W2 | NAT 越えなし → 実質 LAN 止まり。**⚠️ v1 では欠落ではない** — [`V1_SCOPE.md`](docs/V1_SCOPE.md) が **LAN のみ**と決定した (最大の難所を要件から外した)。v2 の項目 | §1.2 |
-| W3 | 検証 (proof-of-execution) が enum のみ。**⚠️ 検証 (A4) は v1 スコープ外** (検証すべき実行がまだ無い)。ただし**推論エンジン未統合は v1 の第1項目** | §1.3 |
+| W3 | 検証 (proof-of-execution) が enum のみ。**⚠️ 検証 (A4) は v1 スコープ外**。~~推論エンジン未統合~~ → **2026-08-18 実装済** (`src/net/inference.rs`)。A4 は「実行が無いから始められない」状態ではなくなった — `Completion.forward_passes` が投入計算量を記録する (Hollow-LLM 対策の足がかり) | §1.3 |
 | W4 | TEE プライバシー訴求と「消費者 GPU は CC 非対応」の矛盾。**⚠️ v1 では A6 ごと削除して解消** — 「提供しない」と `SECURITY.md` で明示。v2 で戻す時に再燃する | §1.4 |
 | W5 | CI 未有効化 (`.github/ci.yml.disabled` のまま)。**⚠️ ブロッカーは同意ではなく `workflows` 権限** (§3 の順 5 参照) | §1.5 |
 | W6 | 永続化がチェックポイントのみ (WAL 未化)。実 ecash 結線時に金銭損失リスクへ昇格 | §1.6 |
@@ -102,7 +108,7 @@ W7 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashManag
 
 | 順 | やること | ブロッカー | 手引き |
 |---|--------|-----------|-------|
-| **1** | **A3+A9: プロンプト推論を実際に走らせる + プロセス隔離** (不可分) | `build` (**mistral.rs**) | **📘 手順書: [`docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md`](docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md)** (配線点 3 箇所・実装順序・DoD)。最小条件は `FIRST_PRINCIPLES_AUDIT.md` §8 (CPU・非決定論的・非TEE・**ローカルモデルパスのみ**)。置き場所は `net/inference.rs` + feature 分離。隔離は pure Rust crate (`sandbox-rs` 等) で足りる — **`Inference` のみなら SSRF も pickle RCE も無い** (`RESEARCH_UPDATE_2026-08.md` §4j, §4l) |
+| ~~**1**~~ | ✅ **A3: 完了 (2026-08-18)** — `src/net/inference.rs` (依存ゼロ・CPU・テスト 22 件が実走)。**mistral.rs は使わなかった** (提供するのは GPU カーネルと速度であって「実行できる能力」ではない)。A9 は**攻撃面の除去**で満たした (外部コード非ロード / ヘッダ検証 / パス無害化 `safe_model_stem` / 計算量上限)。**プロセス隔離は未実装 — v2** | ✅ 済 | `docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md` (冒頭に実装後の訂正あり) |
 | **2** | **A5 を `rope run` に結線** (トークン不要決済 = 唯一の差別化) | `build` (k256) | [`CASHU_BDHKE_IMPLEMENTATION_READINESS.md`](docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md)。**DLEQ (NUT-12) を含めること** — LAN では mint 到達性が保証されず、オフライン検証が必須 (§4c) |
 | **3** | **A1: mDNS で LAN のピアを実際に見つける** (NAT 越えは v2) | `build` (Iroh) | [`P2P_IMPLEMENTATION_READINESS.md`](docs/P2P_IMPLEMENTATION_READINESS.md)。**Iroh の `MdnsDiscovery` はデフォルト有効・リレー不要**で LAN に必要十分 (§4d) |
 | **4** | **`A9→A7` の欠落を直す** — 緊急停止時に未完了 escrow を返金 | **なし** (⚠️ 2026-08-18 中に 2 度訂正: 「なし」→「順 2 に依存」→**「なし」に戻る**。§1.8 修正が mint swap 不要だったため) | `SURPLUS_AND_GAPS.md` §1.10。**(a)** 「完了済みを返金しない」ガードは `refund_escrow` (`ecash.rs:830`) に**既にある**ので再実装不要 — 修正は当初想定より小さい。**(b)** `refund_escrow` は §1.8 の壊れた経路だったが**修正済**なので、`panic_stop` から呼んで問題ない。**残る設計課題は `Session` に `job_id` が無いこと** — 停止したセッションに紐づく escrow を引くキーが今は存在しない (grep 確認済み) |

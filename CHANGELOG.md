@@ -165,6 +165,37 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Added
 
+- **🎯 A3: 推論を実際に実行する — `src/net/inference.rs`** (依存ゼロ / CPU / f32)。
+  **`rope run` は固定文字列を返すのをやめ、本物の Transformer を走らせる。**
+  **テスト 22 件はこの環境で実際に実行・PASS している** (型検査だけではない)。
+  - **疑った要件**: `A3_INFERENCE_IMPLEMENTATION_READINESS.md` は
+    「A3 は mistral.rs が要るので crates.io ブロック」としていた。**これが誤り。**
+    mistral.rs が提供するのは **GPU カーネル・量子化形式の広さ・速度**であって、
+    **「実行できる能力」そのものではない**。forward pass は算術であり
+    `std` の f32 演算で足りる
+  - **依存ゼロにした実利**: (a) crates.io が塞がれた環境でも**テストが実際に走る**、
+    (b) A9 の攻撃面が最小 — **外部コードを一切ロードしない**
+  - **実装**: RMSNorm / RoPE / grouped-query attention + KV キャッシュ /
+    SwiGLU FFN / temperature・top-p サンプリング (xorshift64* で seed 固定なら
+    完全再現) / llama2.c legacy-v1 checkpoint ローダ / SentencePiece 系
+    トークナイザ (スコア順の貪欲マージ + バイトフォールバック)
+  - **A9 の境界** (いずれもテスト付き): チェックポイントのヘッダを信用せず
+    **宣言された重み数とファイル長の完全一致を確認してから割り当てる** (OOM 防止) /
+    `safe_model_stem` が `../../etc/passwd` 等のパストラバーサルを拒否 /
+    語彙数が食い違うトークナイザは**ロード時に**落とす (範囲外 id を実行時に
+    出さない) / プロンプト長・生成長・文脈長のいずれかで必ず停止する
+  - **`Completion.forward_passes`** — 実際に投入した計算量を記録する。
+    Hollow-LLM 攻撃 (§1) が突く「出力は正しいが計算していない」を将来
+    検証するための土台
+  - **`rope run` の挙動**: `~/.rope/models/<名前>.bin` + `tokenizer.bin`
+    (または `ROPE_MODEL_DIR`) があれば実行し、無ければ**無いと言う**。
+    モデルは同梱しない
+  - ⚠️ **正直に言うと**: (a) **まだ「他人の」ではない** — 計算は自分のマシンで
+    走る。A5 (ecash 結線) と A1 (mDNS/Noise) が残っている。
+    (b) **GPU ではない** — CPU f32。GPU は `InferenceEngine` を実装すれば足せる。
+    (c) **プロセス隔離は未実装** — 攻撃面を小さくしたことと、サンドボックスに
+    入れることは別
+
 - **④高速化 + ⑤自動化: オフライン型検査ハーネス
   (`tools/offline-typecheck/`) — crates.io 無しで `src/` 全体を rustc に通す** —
   この環境の根本制約 (`static.crates.io` が 403、GitHub codeload/API も 403 で

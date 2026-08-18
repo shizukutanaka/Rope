@@ -1,5 +1,33 @@
 # A3+A9 実装レディネス — 推論を実際に走らせる (v1 の第1項目)
 
+> # ✅ 実装完了 (2026-08-18) — ただし本書の前提は 1 つ外れた
+>
+> `src/net/inference.rs` として実装済み。**本書が推奨した mistral.rs は使って
+> いない。**
+>
+> **外れた前提**: 本書は「A3 は新規 crate (mistral.rs) を要するので `build`
+> ブロック」としていた。しかし mistral.rs が提供するのは **GPU カーネル・
+> 量子化形式の広さ・速度**であって、**「推論を実行できる」という能力そのもの
+> ではない**。Transformer の forward pass は算術であり、`std` の f32 演算で足りる。
+>
+> **依存ゼロにした結果**:
+> - `static.crates.io` が塞がれたこの環境でも**コンパイルでき、テスト 22 件が
+>   実際に走る** (crate 全体は今も `cargo test` 不可)
+> - A9 の攻撃面が最小 — 外部コードを一切ロードしない
+>
+> **実装した範囲**: RMSNorm / RoPE / grouped-query attention + KV キャッシュ /
+> SwiGLU FFN / temperature・top-p サンプリング / llama2.c legacy-v1 checkpoint
+> ローダ / SentencePiece 系トークナイザ (貪欲マージ + バイトフォールバック)。
+>
+> **実装していない範囲**: GPU バックエンド (`InferenceEngine` トレイトを実装
+> すれば足せる)、量子化 (f32 のみ)、プロセス隔離 (A9 の「隔離」の部分)。
+>
+> **速度**: mistral.rs に遠く及ばない。v1 の要件は「小型モデルが CPU で動く」
+> ([`V1_SCOPE.md`](V1_SCOPE.md) §3) であり、それは満たす。
+>
+> 以下は実装前の調査記録として残す。配線点の記述 (§(a)(b)(c)) は
+> **(a) と (c) が解消済**、**(b) (デモの固定文字列) は未着手**。
+
 > 作成: 2026-08-17。`P2P_IMPLEMENTATION_READINESS.md` /
 > `CASHU_BDHKE_IMPLEMENTATION_READINESS.md` と同じ形式の runbook。
 > **対象読者**: `cargo build` が復旧した後、[`V1_SCOPE.md`](V1_SCOPE.md) の
