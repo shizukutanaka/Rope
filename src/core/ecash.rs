@@ -520,45 +520,85 @@ impl EcashManager {
     }
 
     /// bearer proof を送信 (第三者に渡す前に wallet から消す)
+    ///
+    /// **all-or-nothing** (`docs/SURPLUS_AND_GAPS.md` §1.9 の修正):
+    /// 旧実装は `bucket.retain(...)` で**先に proof を削除してから**
+    /// 「全部見つかったか」を検証していたため、存在しない id や重複 id を含む
+    /// 呼び出しで、マッチした有効 proof だけが失われて bail していた
+    /// (bearer token の消滅 = 資金消滅)。nullifier ストア満杯の中断も
+    /// バケット変異と `total_sats` 減算の**後**にあり、同じ穴だった。
+    ///
+    /// 本実装は「検証フェーズ (一切変異しない) → 実行フェーズ (失敗しない)」に
+    /// 分離する。途中で `Err` を返す場合、`self` は一切変更されていない。
     pub fn spend_proofs(&mut self, mint_id: &str, proof_ids: &[String]) -> Result<Vec<Proof>> {
+        // ---- 検証フェーズ: ここでは self を変異させない ----
+        let bucket = self
+            .wallet
+            .proofs_by_mint
+            .get(mint_id)
+            .context("mint バケット無し")?;
+
+        // 要求 id を 1 つずつバケット内の別々の proof へ対応付ける。
+        // 存在しない id も、同じ proof を指す重複 id も、ここで弾く。
+        let mut selected: Vec<usize> = Vec::with_capacity(proof_ids.len());
+        for id in proof_ids {
+            let found = bucket
+                .iter()
+                .enumerate()
+                .find(|(i, p)| &p.id == id && !selected.contains(i))
+                .map(|(i, _)| i);
+            match found {
+                Some(i) => selected.push(i),
+                None => anyhow::bail!("proof 見つからず (または同一 id の重複指定): {}", id),
+            }
+        }
+
+        // nullifier ストアの容量を**記録前に**確認する。
+        // 容量超過時に eviction しないのは sliding window 攻撃を防ぐため
+        // (`SpentNullifiers::record` の設計)。ここで落とせば、部分的に記録された
+        // まま proof だけ消える状態を作らずに済む。
+        let mut new_nullifiers: HashSet<&str> = HashSet::new();
+        for &i in &selected {
+            let n = bucket[i].nullifier.as_str();
+            if !self.spent_nullifiers.contains(n) {
+                new_nullifiers.insert(n);
+            }
+        }
+        if self.spent_nullifiers.len() + new_nullifiers.len() > self.config.max_nullifier_history {
+            anyhow::bail!(
+                "nullifier ストア満杯 (上限 {}) — max_nullifier_history を増やすか再起動してください",
+                self.config.max_nullifier_history
+            );
+        }
+
+        let spent: Vec<Proof> = selected.iter().map(|&i| bucket[i].clone()).collect();
+        let spent_total: u64 = spent.iter().map(|p| p.amount_sats).sum();
+
+        // ---- 実行フェーズ: ここから先は失敗しない ----
         let bucket = self
             .wallet
             .proofs_by_mint
             .get_mut(mint_id)
             .context("mint バケット無し")?;
-
-        let mut spent = Vec::new();
-        let before_len = bucket.len();
-        bucket.retain(|p| {
-            if proof_ids.contains(&p.id) {
-                spent.push(p.clone());
-                false
-            } else {
-                true
-            }
-        });
-        if spent.len() != proof_ids.len() {
-            anyhow::bail!("一部 proof 見つからず");
+        let mut doomed = selected;
+        doomed.sort_unstable();
+        for i in doomed.into_iter().rev() {
+            bucket.remove(i);
         }
 
-        let spent_total: u64 = spent.iter().map(|p| p.amount_sats).sum();
         self.wallet.total_sats = self.wallet.total_sats.saturating_sub(spent_total);
 
-        // nullifier 記録。容量超過は sliding window 攻撃になるため即中断。
         for p in &spent {
-            if !self
+            // ⚠️ `record` は副作用が本体なので、呼び出しを debug_assert! の中に
+            // 書いてはいけない (release ビルドで式ごと消え、nullifier が記録されず
+            // 二重使用検出が黙って無効化される)。必ず外で呼んでから assert する。
+            let recorded = self
                 .spent_nullifiers
-                .record(p.nullifier.clone(), self.config.max_nullifier_history)
-            {
-                anyhow::bail!(
-                    "nullifier ストア満杯 (上限 {}) — max_nullifier_history を増やすか再起動してください",
-                    self.config.max_nullifier_history
-                );
-            }
+                .record(p.nullifier.clone(), self.config.max_nullifier_history);
+            debug_assert!(recorded, "容量確認済みなので record は成功するはず");
         }
 
         self.stats.total_proofs_spent_sats += spent_total;
-        let _ = before_len;
         self.updated_at = Utc::now();
         Ok(spent)
     }
@@ -591,18 +631,27 @@ impl EcashManager {
             received += p.amount_sats;
         }
 
+        // 容量超過は sliding window 攻撃になるため eviction せず中断する
+        // (`SpentNullifiers::record` の設計)。**記録を始める前に**確認するのは
+        // spend_proofs (§1.9) と同じ理由 — 途中で中断すると「nullifier は
+        // 使用済みなのに残高には入っていない」proof が生まれ、以後その proof は
+        // 二重使用として拒否される (= 資金消滅)。
+        // 上の検証ループにより proofs の nullifier は全て未記録かつバッチ内一意。
+        if self.spent_nullifiers.len() + proofs.len() > self.config.max_nullifier_history {
+            anyhow::bail!(
+                "nullifier ストア満杯 (上限 {}) — max_nullifier_history を増やすか再起動してください",
+                self.config.max_nullifier_history
+            );
+        }
+
         // 受信済み nullifier を記録 (再受信による残高水増しを防止)。
-        // 容量超過は sliding window 攻撃になるため即中断 (spend_proofs と同じ規律)。
         for p in &proofs {
-            if !self
+            // ⚠️ 副作用のある呼び出しを debug_assert! の中に書かないこと
+            // (release で式ごと消える)。
+            let recorded = self
                 .spent_nullifiers
-                .record(p.nullifier.clone(), self.config.max_nullifier_history)
-            {
-                anyhow::bail!(
-                    "nullifier ストア満杯 (上限 {}) — max_nullifier_history を増やすか再起動してください",
-                    self.config.max_nullifier_history
-                );
-            }
+                .record(p.nullifier.clone(), self.config.max_nullifier_history);
+            debug_assert!(recorded, "容量確認済みなので record は成功するはず");
         }
 
         // swap 推奨: 受信 proof を自分の mint で再発行して盗難耐性高める
@@ -1380,6 +1429,123 @@ mod tests {
             err_msg.contains("満杯"),
             "エラーメッセージに満杯を含む: {err_msg}"
         );
+    }
+
+    /// §1.9: 存在しない id が混ざった spend は、**マッチした有効 proof を
+    /// 破壊せずに**失敗する (旧実装は削除してから検証していたため資金が消えた)。
+    #[test]
+    fn test_spend_proofs_unknown_id_leaves_wallet_untouched() {
+        let mut m = EcashManager::default();
+        m.add_mint(test_mint("mint1")).unwrap();
+        m.trust_mint("mint1", MintTrust::Trusted).unwrap();
+        m.mint_tokens("mint1", 7).unwrap();
+
+        let before_total = m.wallet.total_sats;
+        let before_len = m.wallet.proofs_by_mint["mint1"].len();
+        let valid_id = m.wallet.proofs_by_mint["mint1"][0].id.clone();
+
+        let result = m.spend_proofs("mint1", &[valid_id, "存在しない-id".to_string()]);
+
+        assert!(result.is_err(), "存在しない id を含む spend は失敗する");
+        assert_eq!(
+            m.wallet.total_sats, before_total,
+            "失敗時に total_sats が動いてはいけない"
+        );
+        assert_eq!(
+            m.wallet.proofs_by_mint["mint1"].len(),
+            before_len,
+            "失敗時に有効 proof が消えてはいけない (§1.9 の本体)"
+        );
+    }
+
+    /// §1.9: 同じ id を 2 回指定した spend も、1 つ消して失敗してはいけない。
+    #[test]
+    fn test_spend_proofs_duplicate_id_leaves_wallet_untouched() {
+        let mut m = EcashManager::default();
+        m.add_mint(test_mint("mint1")).unwrap();
+        m.trust_mint("mint1", MintTrust::Trusted).unwrap();
+        m.mint_tokens("mint1", 7).unwrap();
+
+        let before_total = m.wallet.total_sats;
+        let before_len = m.wallet.proofs_by_mint["mint1"].len();
+        let id = m.wallet.proofs_by_mint["mint1"][0].id.clone();
+
+        let result = m.spend_proofs("mint1", &[id.clone(), id]);
+
+        assert!(result.is_err(), "同一 id の重複指定は失敗する");
+        assert_eq!(m.wallet.total_sats, before_total);
+        assert_eq!(
+            m.wallet.proofs_by_mint["mint1"].len(),
+            before_len,
+            "重複指定でも proof は消えない"
+        );
+    }
+
+    /// §1.9: nullifier ストア満杯で中断する時も、バケットと total_sats は
+    /// 手つかずでなければならない (旧実装は削除・減算の**後**に中断していた)。
+    #[test]
+    fn test_spend_proofs_overflow_leaves_wallet_untouched() {
+        let mut m = EcashManager::default();
+        m.config.max_nullifier_history = 1;
+        m.add_mint(test_mint("mint1")).unwrap();
+        m.trust_mint("mint1", MintTrust::Trusted).unwrap();
+
+        let first = m.mint_tokens("mint1", 1).unwrap();
+        let first_ids: Vec<String> = first.iter().map(|p| p.id.clone()).collect();
+        m.spend_proofs("mint1", &first_ids).unwrap(); // ストア 1/1 で満杯
+
+        m.mint_tokens("mint1", 2).unwrap();
+        let before_total = m.wallet.total_sats;
+        let before_len = m.wallet.proofs_by_mint["mint1"].len();
+        let ids: Vec<String> = m.wallet.proofs_by_mint["mint1"]
+            .iter()
+            .map(|p| p.id.clone())
+            .collect();
+
+        let result = m.spend_proofs("mint1", &ids);
+
+        assert!(result.is_err(), "満杯なら中断する");
+        assert_eq!(
+            m.wallet.total_sats, before_total,
+            "中断時に total_sats が減ってはいけない"
+        );
+        assert_eq!(
+            m.wallet.proofs_by_mint["mint1"].len(),
+            before_len,
+            "中断時に proof が消えてはいけない"
+        );
+    }
+
+    /// 受信側も同じ規律: 満杯で中断する時、nullifier を部分的に記録して
+    /// 「使用済みなのに残高に入っていない proof」を作ってはいけない。
+    #[test]
+    fn test_receive_proofs_overflow_records_nothing() {
+        let mut sender = EcashManager::default();
+        sender.add_mint(test_mint("mint1")).unwrap();
+        sender.trust_mint("mint1", MintTrust::Trusted).unwrap();
+        let proofs = sender.mint_tokens("mint1", 3).unwrap(); // 3 = 1+2 → 2 proof
+        assert!(proofs.len() >= 2, "2 proof 以上でないとこのテストは無意味");
+
+        let mut receiver = EcashManager::default();
+        receiver.config.max_nullifier_history = 1; // 2 件は入らない
+        receiver.add_mint(test_mint("mint1")).unwrap();
+        receiver.trust_mint("mint1", MintTrust::Trusted).unwrap();
+
+        let result = receiver.receive_proofs(proofs.clone());
+
+        assert!(result.is_err(), "容量不足なら受信ごと中断する");
+        assert_eq!(receiver.wallet.total_sats, 0, "残高が加算されない");
+        assert_eq!(
+            receiver.spent_nullifiers.len(),
+            0,
+            "1 件だけ記録された状態を残してはいけない"
+        );
+        for p in &proofs {
+            assert!(
+                !receiver.spent_nullifiers.contains(&p.nullifier),
+                "中断後も proof は未使用のまま扱われるべき"
+            );
+        }
     }
 
     #[test]

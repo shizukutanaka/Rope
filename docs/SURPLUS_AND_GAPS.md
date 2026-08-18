@@ -257,7 +257,30 @@ compiles", and emphatically ≠ "it works".** CI remains the shipping gate.
   `簡略化` comment exists. Cross-referenced from
   `docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md` Definition of Done.
 
-### 1.9 `spend_proofs` mutates the wallet bucket before validating the full id set — a partially-invalid id list destroys the valid proofs `[OPEN, latent; harmless while §2.3 keeps ecash CLI-unreachable, fix before wiring in v0.3]`
+### 1.9 `spend_proofs` mutates the wallet bucket before validating the full id set — a partially-invalid id list destroys the valid proofs `[FIXED 2026-08-18 — type-checked, NOT test-run]`
+
+> **Fixed.** `spend_proofs` is now split into a **validation phase that mutates
+> nothing** and an **execution phase that cannot fail**:
+> - Each requested id is matched to a *distinct* proof in the bucket up front;
+>   a missing id **or a duplicate id** bails before anything is removed.
+> - The nullifier store's capacity is checked **before** any record is written,
+>   so the overflow bail can no longer leave proofs deleted and `total_sats`
+>   decremented (the old code bailed *after* both).
+> - `receive_proofs` had the same hole in its record loop (a mid-loop overflow
+>   bail left nullifiers marked spent for proofs that were never credited —
+>   permanently unspendable money). Same precheck applied.
+> - ⚠️ While writing the fix I nearly introduced a worse bug: putting the
+>   side-effecting `record(...)` call *inside* `debug_assert!` would compile it
+>   out in release builds, **silently disabling double-spend detection**. The
+>   call is now made outside the assert; a comment marks the trap in both
+>   places.
+> - Four new tests assert the all-or-nothing property (unknown id / duplicate
+>   id / spend overflow / receive overflow all leave the wallet untouched).
+> - **Verification status**: `tools/offline-typecheck/check.sh` PASS
+>   (type-check only). **The tests have not been run** — `cargo test` is still
+>   blocked (§0). CI must run them before this is called done.
+
+**Original finding, kept for context:**
 - Found by careful reading of the ecash money paths (2026-07, this session),
   same pass that produced §1.8.
 - `spend_proofs` (`ecash.rs:523-542`) removes the requested proofs from the

@@ -55,6 +55,27 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
   **ビルド不能環境でのマネーパス修正は CLAUDE.md §4 の運用規範に従い見送り**、
   コンパイラ検証可能な v0.3 での修正に委ねる
 
+### Fixed
+
+- **§1.9 `spend_proofs` / `receive_proofs` を all-or-nothing 化** (`src/core/ecash.rs`) —
+  **型検査のみ実施・テストは未実行** (`cargo test` は §0 の通り不可)。
+  この修正は従来「ビルド不能環境でマネーパスは触らない」(CLAUDE.md §4) として
+  見送っていたもの。**オフライン型検査ハーネスができたので着手できるようになった。**
+  - `spend_proofs` は「変異しない検証フェーズ → 失敗しない実行フェーズ」に分離。
+    要求 id を 1 つずつ**別々の** proof へ対応付けるため、存在しない id も
+    同一 id の重複指定も、バケットを削る**前**に弾かれる
+  - nullifier ストアの容量確認を**記録前**に移動。旧実装は proof 削除と
+    `total_sats` 減算の**後**に満杯で中断しており、資金が消滅していた
+  - `receive_proofs` の記録ループにも同じ穴があった (途中で満杯中断すると
+    「nullifier は使用済みなのに残高に入っていない proof」= 永久に使えない
+    資金が生まれる)。同じ事前確認を適用
+  - ⚠️ **修正中に自分でより悪いバグを作りかけた記録**: 副作用が本体である
+    `record(...)` を `debug_assert!` の中に書くと **release ビルドで式ごと
+    消え、二重使用検出が黙って無効化される**。呼び出しを assert の外に出し、
+    両箇所にコメントで罠を明示した
+  - all-or-nothing 性を検証するテストを 4 件追加 (不明 id / 重複 id /
+    spend 側 overflow / receive 側 overflow — いずれも wallet が無傷であること)
+
 ### Removed
 
 - **②削除の実施: `Workload::Train` / `Workload::Retrieve` / `TrainingMethod` を
