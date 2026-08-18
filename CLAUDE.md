@@ -98,7 +98,7 @@ W7/W8 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashMa
 | **2** | **A5 を `rope run` に結線** (トークン不要決済 = 唯一の差別化) | `build` (k256) | [`CASHU_BDHKE_IMPLEMENTATION_READINESS.md`](docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md)。**DLEQ (NUT-12) を含めること** — LAN では mint 到達性が保証されず、オフライン検証が必須 (§4c) |
 | **3** | **A1: mDNS で LAN のピアを実際に見つける** (NAT 越えは v2) | `build` (Iroh) | [`P2P_IMPLEMENTATION_READINESS.md`](docs/P2P_IMPLEMENTATION_READINESS.md)。**Iroh の `MdnsDiscovery` はデフォルト有効・リレー不要**で LAN に必要十分 (§4d) |
 | **4** | **`A9→A7` の欠落を直す** — 緊急停止時に未完了 escrow を返金 | なし (要ビルド検証) | `SURPLUS_AND_GAPS.md` §1.10。**完了済み escrow は返金しない**こと (貸し手の攻撃面になる) |
-| 5 | ③単純化 → ④高速化 → **⑤ CI 有効化** | **`consent`** | **④より前に⑤をやらない** (Musk の順序違反)。CI は動くものが出てから |
+| 5 | ⑤ **CI 有効化 — 準備完了、あと 1 手** | **`権限`** (同意ではない) | ⚠️ **訂正**: 従来「secrets アクセスのため要同意」と記録していたが**誤り** — `.github/ci.yml.disabled` は `check`/`test`/`test-http`/`clippy`/`fmt`/`gate` のみで **secrets 参照ゼロ**。実際のブロッカーは **git gateway と GitHub App に `workflows` 権限が無い**こと (両経路で 403 実測)。**リポジトリ所有者が `git mv .github/ci.yml.disabled .github/workflows/ci.yml` すれば有効化される**。**CI はこの環境で唯一のコンパイラ検証手段** (ローカルは crates.io 403 だが Actions は到達可) |
 | — | ecash マネーパスの既知不整合 (§1.8/§1.9) | — | **A5 結線 (順 2) と同時に必ず直す** |
 
 **v2 へ延期した項目の根拠**は消えていない — 戻す時は
@@ -145,20 +145,39 @@ W7/W8 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashMa
 
 ---
 
-## 5. ドキュメント地図 (何を知りたい時にどれを読むか)
+## 5. ドキュメント地図 — **3 層構造** (2026-08 ③単純化)
 
-| 知りたいこと | 読むファイル |
-|-------------|-------------|
-| **🎯 何を作り何を作らないか (v1 の決定)** | **[`docs/V1_SCOPE.md`](docs/V1_SCOPE.md)** ← まずこれ |
-| 過不足の機械可読な一覧 (§アンカー付き) | [`docs/SURPLUS_AND_GAPS.md`](docs/SURPLUS_AND_GAPS.md) |
-| **なぜその機能が要るのか** (公理からの演繹・優先順位の根拠) | [`docs/FIRST_PRINCIPLES_AUDIT.md`](docs/FIRST_PRINCIPLES_AUDIT.md) |
-| 長所/短所/改善点の人間向け評価 (ソクラテス式問答含む) | [`docs/ASSESSMENT.md`](docs/ASSESSMENT.md) |
-| **推論をどう実装するか (v1 の順序1)** | **[`docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md`](docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md)** |
-| 実 P2P をどう実装するか | [`docs/P2P_IMPLEMENTATION_READINESS.md`](docs/P2P_IMPLEMENTATION_READINESS.md) |
-| 実 BDHKE をどう実装するか | [`docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md`](docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md) |
-| どのコードが CLI から到達するか | [`docs/REACHABILITY_AUDIT.md`](docs/REACHABILITY_AUDIT.md) |
-| 何が本物の暗号で何がプレースホルダか | [`SECURITY.md`](SECURITY.md) |
+> `docs/` は 14 文書・6,500 行ある。**実装するなら 3 つだけ読めばよい。**
+> 残りは「なぜそう決めたか」の根拠と履歴であり、**実装前に読む必要は無い**。
+
+### 🔨 Tier 1 — v1 を実装するなら、この 3 つだけ
+
+| # | 文書 | 何が書いてあるか |
+|---|------|----------------|
+| 1 | **[`docs/V1_SCOPE.md`](docs/V1_SCOPE.md)** | **何を作り、何を作らないか** (Musk のアルゴリズムによる決定) |
+| 2 | **[`docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md`](docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md)** | **第1項目 (推論+隔離) の手順書** — 配線点・順序・DoD |
+| 3 | **[`docs/SURPLUS_AND_GAPS.md`](docs/SURPLUS_AND_GAPS.md)** | **実装中に直す欠落** — §1.8/§1.9 (ecash 不整合) §1.10 (`A9→A7`) §1.11 (A9 の制約) |
+
+第2項目 (A5 結線) に進む時のみ
+[`CASHU_BDHKE_IMPLEMENTATION_READINESS.md`](docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md)、
+第3項目 (A1) に進む時のみ
+[`P2P_IMPLEMENTATION_READINESS.md`](docs/P2P_IMPLEMENTATION_READINESS.md) を開く。
+
+### 📐 Tier 2 — 判断の根拠 (「なぜ」を問われた時に開く)
+
+| 知りたいこと | 文書 |
+|---|---|
+| なぜその機能が要るのか (公理からの演繹) | [`docs/FIRST_PRINCIPLES_AUDIT.md`](docs/FIRST_PRINCIPLES_AUDIT.md) |
+| v1 の決定を支えた証拠 (論文・実測値) | [`docs/RESEARCH_UPDATE_2026-08.md`](docs/RESEARCH_UPDATE_2026-08.md) |
+| 何が本物の暗号で、v1 が何を提供しないか | [`SECURITY.md`](SECURITY.md) |
 | モジュール構造・状態機械マップ | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| 優先度付き改善バックログ (2026-06) + 差分 (2026-07, **2026-08**) | [`docs/RESEARCH_IMPROVEMENTS.md`](docs/RESEARCH_IMPROVEMENTS.md), [`docs/RESEARCH_UPDATE_2026-07.md`](docs/RESEARCH_UPDATE_2026-07.md), [`docs/RESEARCH_UPDATE_2026-08.md`](docs/RESEARCH_UPDATE_2026-08.md) |
+| どのコードが CLI から到達するか | [`docs/REACHABILITY_AUDIT.md`](docs/REACHABILITY_AUDIT.md) |
 | 貢献規約・品質ゲート | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| 変更履歴 | [`CHANGELOG.md`](CHANGELOG.md) |
+
+### 📦 Tier 3 — 履歴 (v1 実装では開かなくてよい)
+
+`ASSESSMENT.md` (人間向け評価) / `RESEARCH_IMPROVEMENTS.md` (2026-06 バックログ) /
+`RESEARCH_UPDATE_2026-07.md` (旧差分) / `CATEGORY_RESEARCH.md` (2026-06 調査) /
+`IMPROVEMENT_SYNTHESIS.md` (初期の統合案) / [`CHANGELOG.md`](CHANGELOG.md)
+
+**v2 で延期項目 (A4/A6/NAT越え/Sybil) を戻す時**は Tier 2/3 に根拠が揃っている。

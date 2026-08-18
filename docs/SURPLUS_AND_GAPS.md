@@ -118,7 +118,27 @@ against HEAD before trusting anything past `830d8c4`.
        (an explicit "obfuscation only / no guarantee" variant)
     3. Treat consumer GPUs as **non-sensitive workloads only**
 
-### 1.5 CI defined but not activated `[BLOCKED:consent]`
+### 1.5 CI defined but not activated `[BLOCKED:permission — corrected 2026-08]`
+> **⚠️ 2026-08-18 訂正**: この項目はこれまで `[BLOCKED:consent]` とし、
+> 「secrets アクセスを伴う自動パイプラインの起動にユーザーの明示同意が必要」と
+> 記録していた。**ファイルを読んで確認した結果、これは誤りだった** —
+> `.github/ci.yml.disabled` の `env:` は `CARGO_TERM_COLOR` と `RUSTFLAGS` のみ、
+> ジョブは `check`/`test`/`test-http`/`clippy`/`fmt`/`gate` で
+> **secrets 参照はゼロ、deploy も publish も無い**。
+>
+> **実際のブロッカーは権限**: git gateway は
+> "refusing to allow a GitHub App to create or update workflow ... without
+> `workflows` permission" で拒否し、GitHub API 経由も 403
+> ("Resource not accessible by integration") — **両経路で実測**。
+>
+> **リポジトリ所有者なら 1 手で有効化できる**:
+> `git mv .github/ci.yml.disabled .github/workflows/ci.yml`
+>
+> **これは v1 にとって単なる自動化ではない**: ローカルは `static.crates.io` 403 で
+> ビルド不能だが **GitHub Actions は crates.io に到達できる**。CI は
+> **この環境で唯一のコンパイラ検証手段**であり、`830d8c4` 以降の
+> 未検証コミット群 (§0) を一括で検証する。
+
 - `.github/ci.yml.disabled` has a complete 5-job pipeline (check/test/
   test-http/clippy/fmt + gate), improved this session (broadened push/PR
   triggers off a nonexistent `main` branch requirement, added an
