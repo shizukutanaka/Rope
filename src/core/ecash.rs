@@ -802,6 +802,38 @@ impl EcashManager {
         Ok(())
     }
 
+    /// 返金で価値を wallet へ戻す (§1.8 の修正)。
+    ///
+    /// `wallet` には残高の表現が 2 つある: scalar の `total_sats` と、
+    /// `proofs_by_mint` に入っている実際の bearer token。**支払いに使えるのは
+    /// 後者だけ**で、`lock_funds` は proof 合計を見て残高不足を判定する。
+    /// 旧実装の返金経路は `total_sats` だけを増やして proof を戻さなかったため、
+    /// 返金のたびに「表示されるが使えない残高」が積み上がっていた。
+    ///
+    /// ここでは `lock_funds` がお釣りを作るのと同じ機構で proof を発行し直し、
+    /// `total_sats == Σ proofs` の不変条件を保つ。額の分解は 2 のべき乗なので
+    /// 端数 (dispute の折半等) も表現できる。
+    ///
+    /// ⚠️ **v0.3 で実 mint に結線する時は、ここを mint への swap 要求に
+    /// 置き換えること。** 現在の `build_proof` はプレースホルダで、ローカルに
+    /// proof を組み立てているにすぎない (`docs/SURPLUS_AND_GAPS.md` §1.1)。
+    /// 実 mint では「手元で発行し直す」は成立しない。
+    fn credit_proofs(&mut self, mint_id: &str, amount_sats: u64) {
+        if amount_sats == 0 {
+            return;
+        }
+        let keyset_id = Self::derive_keyset_id(mint_id);
+        let bucket = self
+            .wallet
+            .proofs_by_mint
+            .entry(mint_id.to_string())
+            .or_default();
+        for d in Self::decompose_powers_of_two(amount_sats) {
+            bucket.push(Self::build_proof(mint_id, &keyset_id, d));
+        }
+        self.wallet.total_sats += amount_sats;
+    }
+
     /// Bob がジョブ開始
     pub fn mark_escrow_in_progress(&mut self, escrow_id: &str) -> Result<()> {
         let e = self
@@ -881,9 +913,11 @@ impl EcashManager {
         }
         e.state = EscrowState::Refunded;
         e.resolved_at = Some(Utc::now());
+        let mint_id = e.mint_id.clone();
+        let amount = e.amount_sats;
 
-        // 返金額を wallet に戻す (簡略化)
-        self.wallet.total_sats += e.amount_sats;
+        // 返金額を wallet に戻す。scalar だけでなく proof も戻す (§1.8)。
+        self.credit_proofs(&mint_id, amount);
 
         self.stats.total_escrows_refunded += 1;
         self.archive_escrow(escrow_id);
@@ -927,16 +961,18 @@ impl EcashManager {
         e.resolved_at = Some(Utc::now());
 
         let amount = e.amount_sats;
+        let mint_id = e.mint_id.clone();
         match resolution {
             DisputeResolution::PayerWins => {
-                self.wallet.total_sats += amount;
+                // scalar だけでなく proof も戻す (§1.8)
+                self.credit_proofs(&mint_id, amount);
                 self.stats.total_escrows_refunded += 1;
             }
             DisputeResolution::PayeeWins => {
                 self.stats.total_escrows_released += 1;
             }
             DisputeResolution::Split => {
-                self.wallet.total_sats += amount / 2;
+                self.credit_proofs(&mint_id, amount / 2);
                 self.stats.total_escrows_refunded += 1;
             }
         }
@@ -1074,9 +1110,10 @@ impl EcashManager {
 
         s.state = StreamState::Closed;
         let refund = s.total_locked_sats.saturating_sub(s.drained_sats);
+        let mint_id = s.mint_id.clone();
 
-        // 未使用分を wallet に返す
-        self.wallet.total_sats += refund;
+        // 未使用分を wallet に返す。scalar だけでなく proof も戻す (§1.8)。
+        self.credit_proofs(&mint_id, refund);
 
         // 履歴へ移動
         if let Some(pos) = self.streams.iter().position(|s| s.id == stream_id) {
@@ -1544,6 +1581,103 @@ mod tests {
             assert!(
                 !receiver.spent_nullifiers.contains(&p.nullifier),
                 "中断後も proof は未使用のまま扱われるべき"
+            );
+        }
+    }
+
+    /// wallet が保持する実際の bearer token の合計。
+    /// `total_sats` (scalar) と一致していなければならない (§1.8 の不変条件)。
+    fn proof_sum(m: &EcashManager) -> u64 {
+        m.wallet
+            .proofs_by_mint
+            .values()
+            .flat_map(|b| b.iter())
+            .map(|p| p.amount_sats)
+            .sum()
+    }
+
+    fn funded_manager(sats: u64) -> EcashManager {
+        let mut m = EcashManager::default();
+        m.add_mint(test_mint("mint1")).unwrap();
+        m.trust_mint("mint1", MintTrust::Trusted).unwrap();
+        m.mint_tokens("mint1", sats).unwrap();
+        m
+    }
+
+    /// §1.8: escrow 返金後も `total_sats == Σproofs` であり、
+    /// **返ってきた残高が実際に再使用できる**こと。
+    /// 旧実装は scalar だけ増やしていたため、返金後の残高は表示されるだけで
+    /// `lock_funds` (proof 合計を見る) が「残高不足」で落ちていた。
+    #[test]
+    fn test_refund_escrow_restores_spendable_balance() {
+        let mut m = funded_manager(1000);
+        let before = m.wallet.total_sats;
+        assert_eq!(proof_sum(&m), before, "初期状態で不変条件が成立している");
+
+        let e = m
+            .open_escrow("job1", "alice", "bob", "mint1", 300, "cond")
+            .unwrap();
+        assert_eq!(
+            proof_sum(&m),
+            m.wallet.total_sats,
+            "ロック後も不変条件は保たれる"
+        );
+
+        m.refund_escrow(&e.id).unwrap();
+
+        assert_eq!(m.wallet.total_sats, before, "返金で額が戻る");
+        assert_eq!(
+            proof_sum(&m),
+            m.wallet.total_sats,
+            "返金後も total_sats == Σproofs (§1.8 の本体)"
+        );
+
+        // 返ってきた残高が実際に使えることまで確認する
+        m.open_escrow("job2", "alice", "bob", "mint1", 300, "cond")
+            .expect("返金された残高は再度ロックできる必要がある");
+    }
+
+    /// §1.8: stream の未使用分返金でも不変条件が保たれる。
+    #[test]
+    fn test_close_stream_refund_restores_proofs() {
+        let mut m = funded_manager(1000);
+        let before = m.wallet.total_sats;
+
+        let s = m
+            .open_stream("job1", "alice", "bob", "mint1", 200, 1)
+            .unwrap();
+        m.close_stream(&s.id).unwrap();
+
+        assert_eq!(
+            proof_sum(&m),
+            m.wallet.total_sats,
+            "stream 返金後も total_sats == Σproofs"
+        );
+        assert!(
+            m.wallet.total_sats <= before,
+            "返金額が元本を超えない (流出済み分は戻らない)"
+        );
+    }
+
+    /// §1.8: dispute の解決 (払い戻し側) でも不変条件が保たれる。
+    /// 折半 (`Split`) は端数を含むが、2 のべき乗分解で表現できる。
+    #[test]
+    fn test_resolve_dispute_refund_restores_proofs() {
+        for (resolution, label) in [
+            (DisputeResolution::PayerWins, "PayerWins"),
+            (DisputeResolution::Split, "Split"),
+        ] {
+            let mut m = funded_manager(1000);
+            let e = m
+                .open_escrow("job1", "alice", "bob", "mint1", 300, "cond")
+                .unwrap();
+            m.dispute_escrow(&e.id, "出力が空").unwrap();
+            m.resolve_dispute(&e.id, resolution).unwrap();
+
+            assert_eq!(
+                proof_sum(&m),
+                m.wallet.total_sats,
+                "{label} の解決後も total_sats == Σproofs"
             );
         }
     }

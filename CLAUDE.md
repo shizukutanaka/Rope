@@ -74,7 +74,7 @@
 | W4 | TEE プライバシー訴求と「消費者 GPU は CC 非対応」の矛盾。**⚠️ v1 では A6 ごと削除して解消** — 「提供しない」と `SECURITY.md` で明示。v2 で戻す時に再燃する | §1.4 |
 | W5 | CI 未有効化 (`.github/ci.yml.disabled` のまま)。**⚠️ ブロッカーは同意ではなく `workflows` 権限** (§3 の順 5 参照) | §1.5 |
 | W6 | 永続化がチェックポイントのみ (WAL 未化)。実 ecash 結線時に金銭損失リスクへ昇格 | §1.6 |
-| W7 | **ecash マネーパスの潜在的不整合** — §1.9 (`spend_proofs`/`receive_proofs` が検証前に変異) は **2026-08-18 修正済** (型検査のみ・テスト未実行)。**§1.8 (返金が `total_sats` を増やすが proof 未復元 → 「表示されるが使えない残高」) は未修正** — `Escrow` に `locked_proofs` を持たせるか実 mint swap が要る (§1.10 参照) | §1.8, §1.9 |
+| W7 | ~~**ecash マネーパスの潜在的不整合 2 件**~~ → **§1.8・§1.9 とも 2026-08-18 修正済** (⚠️ **型検査のみ・テストは未実行**。CI で走らせるまで「直った」と断言しないこと)。§1.8 は `credit_proofs` で返金時に proof も再発行、§1.9 は検証フェーズと実行フェーズの分離。**v0.3 の実 mint 結線時に `credit_proofs` を mint swap へ置換すること** | §1.8, §1.9 |
 | W8 | ~~6 個の `format_*` が未表示~~ → **2026-08-18 解消** (3 つを既存動詞へ結線 / 2 つ削除 / 1 つは A6 ごと v2 延期。5 つ目の動詞は作っていない)。**7 個の QR/TOFU 統計は未表示のまま** | §1.7 |
 
 W7 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashManager` の変異 API 全体が
@@ -105,7 +105,7 @@ W7 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashManag
 | **1** | **A3+A9: プロンプト推論を実際に走らせる + プロセス隔離** (不可分) | `build` (**mistral.rs**) | **📘 手順書: [`docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md`](docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md)** (配線点 3 箇所・実装順序・DoD)。最小条件は `FIRST_PRINCIPLES_AUDIT.md` §8 (CPU・非決定論的・非TEE・**ローカルモデルパスのみ**)。置き場所は `net/inference.rs` + feature 分離。隔離は pure Rust crate (`sandbox-rs` 等) で足りる — **`Inference` のみなら SSRF も pickle RCE も無い** (`RESEARCH_UPDATE_2026-08.md` §4j, §4l) |
 | **2** | **A5 を `rope run` に結線** (トークン不要決済 = 唯一の差別化) | `build` (k256) | [`CASHU_BDHKE_IMPLEMENTATION_READINESS.md`](docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md)。**DLEQ (NUT-12) を含めること** — LAN では mint 到達性が保証されず、オフライン検証が必須 (§4c) |
 | **3** | **A1: mDNS で LAN のピアを実際に見つける** (NAT 越えは v2) | `build` (Iroh) | [`P2P_IMPLEMENTATION_READINESS.md`](docs/P2P_IMPLEMENTATION_READINESS.md)。**Iroh の `MdnsDiscovery` はデフォルト有効・リレー不要**で LAN に必要十分 (§4d) |
-| **4** | **`A9→A7` の欠落を直す** — 緊急停止時に未完了 escrow を返金 | **順 2 に依存** (⚠️ 2026-08-18 訂正: 従来「なし」としていたのは誤り) | `SURPLUS_AND_GAPS.md` §1.10。**(a)** 「完了済みを返金しない」ガードは `refund_escrow` (`ecash.rs:830`) に**既にある**ので再実装不要 — 修正は当初想定より小さい。**(b)** しかし `refund_escrow` は §1.8 の壊れた経路そのもの (`total_sats` だけ増やし proof を戻さない) で、これを `panic_stop` から呼ぶと **§1.8 が初めて CLI から到達可能になる**。さらに `lock_funds` は locked proof を破棄し `Escrow` に保持フィールドが無いため、§1.8 は「proof を戻す」だけでは直せない (`Escrow` に `locked_proofs` を足すか、実 mint swap = 順 2 が要る) |
+| **4** | **`A9→A7` の欠落を直す** — 緊急停止時に未完了 escrow を返金 | **なし** (⚠️ 2026-08-18 中に 2 度訂正: 「なし」→「順 2 に依存」→**「なし」に戻る**。§1.8 修正が mint swap 不要だったため) | `SURPLUS_AND_GAPS.md` §1.10。**(a)** 「完了済みを返金しない」ガードは `refund_escrow` (`ecash.rs:830`) に**既にある**ので再実装不要 — 修正は当初想定より小さい。**(b)** `refund_escrow` は §1.8 の壊れた経路だったが**修正済**なので、`panic_stop` から呼んで問題ない。**残る設計課題は `Session` に `job_id` が無いこと** — 停止したセッションに紐づく escrow を引くキーが今は存在しない (grep 確認済み) |
 | 5 | ⑤ **CI 有効化 — 準備完了、あと 1 手** | **`権限`** (同意ではない) | ⚠️ **訂正**: 従来「secrets アクセスのため要同意」と記録していたが**誤り** — `.github/ci.yml.disabled` は `check`/`test`/`test-http`/`clippy`/`fmt`/`gate` のみで **secrets 参照ゼロ**。実際のブロッカーは **git gateway と GitHub App に `workflows` 権限が無い**こと (両経路で 403 実測)。**リポジトリ所有者が `git mv .github/ci.yml.disabled .github/workflows/ci.yml` すれば有効化される**。**CI はこの環境で唯一のコンパイラ検証手段** (ローカルは crates.io 403 だが Actions は到達可) |
 | — | ecash マネーパスの既知不整合 (§1.8/§1.9) | — | **A5 結線 (順 2) と同時に必ず直す** |
 

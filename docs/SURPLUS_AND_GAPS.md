@@ -225,7 +225,36 @@ compiles", and emphatically ≠ "it works".** CI remains the shipping gate.
   (CHANGELOG `[0.2.12]`): cramming 7 diagnostic counters into a user-facing
   status display was judged to hurt readability more than it helps.
 
-### 1.8 Refund paths credit `wallet.total_sats` without restoring proofs — invariant breaks after any refund `[OPEN, latent; harmless while §2.3 keeps ecash CLI-unreachable, MUST fix with real mint in v0.3]`
+### 1.8 Refund paths credit `wallet.total_sats` without restoring proofs — invariant breaks after any refund `[FIXED 2026-08-18 — type-checked, NOT test-run; MUST become a mint swap in v0.3]`
+
+> **Fixed, and more cheaply than this entry predicted.** The entry (and the
+> §1.10 ordering note) assumed the fix needed either a new `locked_proofs`
+> field on `Escrow` or a real mint swap — i.e. that it was blocked on BDHKE.
+> **Neither is true.** What the invariant requires is only that a refund puts
+> *some* proofs summing to the refunded amount back into the bucket, and
+> `lock_funds` already re-issues change proofs locally by the same mechanism.
+> - New private helper `EcashManager::credit_proofs(mint_id, amount_sats)`
+>   decomposes the amount into powers of two, issues proofs into the mint
+>   bucket, and adds to `total_sats` — the two representations move together.
+> - All four refund sites now route through it: `refund_escrow`,
+>   `resolve_dispute` (`PayerWins` and `Split`), and `close_stream`.
+>   `Split`'s half-amount is representable because the decomposition is
+>   power-of-two, not fixed-denomination.
+> - Existing tests all assert on `total_sats`, which is unchanged; three new
+>   tests assert `total_sats == Σproofs` after each refund path, and one
+>   asserts the stronger property that **the refunded balance can actually be
+>   locked again** (the old code passed the scalar check and failed here).
+> - ⚠️ **This is correct only under the current placeholder BDHKE**, where
+>   issuing a proof locally is what `mint_tokens` already does (§1.1). With a
+>   real mint, "re-issue it here" is not a thing. `credit_proofs`'s doc comment
+>   carries the instruction to replace it with a mint swap in v0.3.
+> - **Verification status**: `tools/offline-typecheck/check.sh` PASS
+>   (type-check only). **Tests not run** — `cargo test` is still blocked (§0).
+> - **Consequence for §1.10**: the ordering constraint recorded there earlier
+>   the same day ("item 2 → item 4 is mandatory") **no longer applies** — see
+>   the correction in §1.10.
+
+**Original finding, kept for context:**
 - Found by careful reading of the ecash money paths (2026-07, this session).
 - The wallet has two representations of balance that are supposed to agree:
   `wallet.total_sats` (a scalar) and `Σ` of proof amounts across
@@ -381,9 +410,19 @@ compiles", and emphatically ≠ "it works".** CI remains the shipping gate.
         `#[serde(default)]` per 規範4), or
     (b) a real mint swap re-issuing proofs on refund (needs real BDHKE, i.e.
         v1 実装順の項目 2).
-  - **Therefore the v1 order is: item 2 (A5/BDHKE + the §1.8 fix) → item 4
-    (A9→A7).** Item 4 is *not* independently shippable, and it is *not*
-    "blocker: none". Corrected in `CLAUDE.md` §3.
+  - ~~**Therefore the v1 order is: item 2 (A5/BDHKE + the §1.8 fix) → item 4
+    (A9→A7).**~~
+  - **⚠️ Correction, same day (2026-08-18): this ordering claim was wrong, and
+    it was wrong for the same reason the entry above it was — I assumed the
+    §1.8 fix needed a mint swap or a schema change.** It needed neither
+    (§1.8, now FIXED). With §1.8 fixed, `refund_escrow` restores proofs as well
+    as the scalar, so wiring `panic_stop → refund_escrow` no longer exposes a
+    broken invariant. **Item 4 is unblocked again**: it is a small change
+    (`panic_stop` refunds the escrows whose `job_id` matches the stopped
+    session; `refund_escrow`'s existing `Deposited | InProgress` guard supplies
+    the anti-clawback condition for free). It is still un-started, and it still
+    needs `panic_stop` to learn which `job_id` it is stopping — `Session` has no
+    `job_id` field today, which is the actual remaining design question.
 
 ### 1.11 A9 hard constraints for the A3 wiring — model format and URI fetching `[PARTLY SATISFIED BY DELETION 2026-08-18; the remaining half is still OPEN]`
 

@@ -57,6 +57,30 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Fixed
 
+- **§1.8 返金経路が proof を復元しない不整合を修正** (`src/core/ecash.rs`) —
+  **型検査のみ実施・テストは未実行**。
+  **この entry の当初の予測 (「実 mint swap か `Escrow` へのフィールド追加が要る」)
+  は誤りだった。** 不変条件が要求しているのは「返金額と同額の proof がバケットに
+  戻ること」だけで、`lock_funds` はお釣り proof を既にローカルで再発行している。
+  同じ機構を使えばよかった。
+  - 新設の private helper `credit_proofs(mint_id, amount_sats)` が額を 2 のべき乗に
+    分解して proof を発行し、`total_sats` も同時に増やす — 2 つの残高表現が
+    必ず一緒に動く
+  - 返金 4 箇所を全てこれ経由に変更: `refund_escrow` /
+    `resolve_dispute` (`PayerWins`・`Split`) / `close_stream`。
+    `Split` の端数も 2 のべき乗分解なので表現できる
+  - 既存テストは全て `total_sats` に対する assert なので影響なし。
+    不変条件 (`total_sats == Σproofs`) を検証するテストを 3 件追加し、
+    さらに**返金された残高が実際に再ロックできる**ことまで確認するテストを追加
+    (旧実装は scalar のチェックは通るがここで落ちていた)
+  - ⚠️ **これが正しいのは現在のプレースホルダ BDHKE 下でのみ。** 実 mint では
+    「手元で発行し直す」は成立しない。`credit_proofs` の doc comment に
+    「v0.3 で mint swap へ置換」を明記した
+  - **副次効果**: 同日先に記録した「§1.10 (A9→A7) は順 2 に依存する」という
+    順序制約は**この修正で解消**した。`SURPLUS_AND_GAPS.md` §1.10 に訂正を記載。
+    項目 4 に残る設計課題は「`Session` に `job_id` フィールドが無い」ことだけ
+    (grep 確認済み)
+
 - **§1.9 `spend_proofs` / `receive_proofs` を all-or-nothing 化** (`src/core/ecash.rs`) —
   **型検査のみ実施・テストは未実行** (`cargo test` は §0 の通り不可)。
   この修正は従来「ビルド不能環境でマネーパスは触らない」(CLAUDE.md §4) として
