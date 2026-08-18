@@ -74,17 +74,29 @@ W7/W8 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashMa
 
 ---
 
-## 3. 改善案 (優先順 + ブロッカー種別を明示)
+## 3. 改善案 — **v1 スコープ順** (2026-08 決定)
 
-| 優先 | 改善案 | ブロッカー | 着手の手引き |
-|------|--------|-----------|-------------|
-| 最高 | 実 P2P 結線 (mDNS→Noise→NAT 越え) | `build` (新規 crate 要) | [`docs/P2P_IMPLEMENTATION_READINESS.md`](docs/P2P_IMPLEMENTATION_READINESS.md) — libp2p vs Iroh 比較・段階手順あり |
-| 最高 | **推論エンジン統合 (実際に計算を実行する能力)** | `build` (**mistral.rs 推奨**) | **第一原理監査で「型すら存在しない唯一の公理 (A3)」と判明** — 他は型だけでも在る。**最小充足条件は `FIRST_PRINCIPLES_AUDIT.md` §8 に演繹済み** (CPU・非決定論的・非TEE・ローカルモデルパスで A3 は満たせる / 置き場所は `net/inference.rs` + feature 分離が既存アーキと整合)。crate 比較は `RESEARCH_UPDATE_2026-07.md` §6。**⚠️ A3 は A9 (サンドボックス隔離) と不可分** — 実行させることは隔離を要求する。`Workload::Inference` と `Train/RAG` を別脅威モデルで扱う (`RESEARCH_UPDATE_2026-08.md` §4h) |
-| 高 | 実 BDHKE (Cashu 盲目署名) | `build` (k256 要) | [`docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md`](docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md) — NUT-00 数式検証済・DoD あり。第一原理では A5 は A1/A3 に依存する後段 (`FIRST_PRINCIPLES_AUDIT.md` §4) |
-| 高 | 検証エンジン (proof-of-execution) | **A3 (推論実行) が前提** | `SURPLUS_AND_GAPS.md` §1.3。第一原理では A3 の後段。**⚠️ 手法選定の前に [`RESEARCH_UPDATE_2026-08.md`](docs/RESEARCH_UPDATE_2026-08.md) §1 を読むこと** — Hollow-LLM 攻撃 (IEEE S&P'26) が「出力の正しさだけを見る検証」を破るため、**投入計算量の検証**を受け入れ基準に含める必要がある |
-| 高 | CI 有効化 (`.github/workflows/` へ移動) | **`consent`** (secrets アクセス) | ユーザーの明示同意なしに移動しない。`.disabled` 内容は改善済 |
-| 中 | `session.rs` `panic_stop` クラスターを A3 の隔離 (A9) と整合させる | **`decision`** (製品判断) | **⚠️ 2026-08-08 訂正**: 当初「削除候補」としたが `panic_stop` は **A9 (貸し手の緊急停止) に対応**するため削除しない。docker 前提を A3 実装時の隔離技術 (gVisor/Firecracker) と整合させる (`SURPLUS_AND_GAPS.md` §2.4, `RESEARCH_UPDATE_2026-08.md` §4h) |
-| 中低 | 永続化 WAL 化、sats→USD の実価格フィード | 実 ecash 結線と連動 | §1.6, §2.5 |
+> **🎯 まず [`docs/V1_SCOPE.md`](docs/V1_SCOPE.md) を読むこと。**
+> Musk のアルゴリズム (①要件を疑え → ②削除 → ③単純化 → ④高速化 → ⑤自動化) で
+> 要件を削り、**出荷できる最小の製品**を確定させた。
+> **v1 = LAN 上の他人の GPU で、プロンプト推論を、トークン不要の ecash で払って、
+> 設定ゼロで走らせる。**
+>
+> **v1 から外したもの (v2 へ延期、着手しないこと)**: TEE 秘匿 (A6) /
+> `Workload::Train`・`Retrieve` / 実行検証 (A4) / NAT 越え / Sybil 耐性。
+> これらを外すと**構造的緊張 4 件中 3 件が消える** — 削除が最大の設計改善だった。
+
+| 順 | やること | ブロッカー | 手引き |
+|---|--------|-----------|-------|
+| **1** | **A3+A9: プロンプト推論を実際に走らせる + プロセス隔離** (不可分) | `build` (**mistral.rs**) | 最小条件は `FIRST_PRINCIPLES_AUDIT.md` §8 (CPU・非決定論的・非TEE・**ローカルモデルパスのみ**)。置き場所は `net/inference.rs` + feature 分離。隔離は pure Rust crate (`sandbox-rs` 等) で足りる — **`Inference` のみなら SSRF も pickle RCE も無い** (`RESEARCH_UPDATE_2026-08.md` §4j, §4l) |
+| **2** | **A5 を `rope run` に結線** (トークン不要決済 = 唯一の差別化) | `build` (k256) | [`CASHU_BDHKE_IMPLEMENTATION_READINESS.md`](docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md)。**DLEQ (NUT-12) を含めること** — LAN では mint 到達性が保証されず、オフライン検証が必須 (§4c) |
+| **3** | **A1: mDNS で LAN のピアを実際に見つける** (NAT 越えは v2) | `build` (Iroh) | [`P2P_IMPLEMENTATION_READINESS.md`](docs/P2P_IMPLEMENTATION_READINESS.md)。**Iroh の `MdnsDiscovery` はデフォルト有効・リレー不要**で LAN に必要十分 (§4d) |
+| **4** | **`A9→A7` の欠落を直す** — 緊急停止時に未完了 escrow を返金 | なし (要ビルド検証) | `SURPLUS_AND_GAPS.md` §1.10。**完了済み escrow は返金しない**こと (貸し手の攻撃面になる) |
+| 5 | ③単純化 → ④高速化 → **⑤ CI 有効化** | **`consent`** | **④より前に⑤をやらない** (Musk の順序違反)。CI は動くものが出てから |
+| — | ecash マネーパスの既知不整合 (§1.8/§1.9) | — | **A5 結線 (順 2) と同時に必ず直す** |
+
+**v2 へ延期した項目の根拠**は消えていない — 戻す時は
+[`RESEARCH_UPDATE_2026-08.md`](docs/RESEARCH_UPDATE_2026-08.md) を参照。
 
 **新研究**: 2026-07 時点の関連論文・スタック更新は
 [`docs/RESEARCH_UPDATE_2026-07.md`](docs/RESEARCH_UPDATE_2026-07.md)
@@ -131,6 +143,7 @@ W7/W8 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashMa
 
 | 知りたいこと | 読むファイル |
 |-------------|-------------|
+| **🎯 何を作り何を作らないか (v1 の決定)** | **[`docs/V1_SCOPE.md`](docs/V1_SCOPE.md)** ← まずこれ |
 | 過不足の機械可読な一覧 (§アンカー付き) | [`docs/SURPLUS_AND_GAPS.md`](docs/SURPLUS_AND_GAPS.md) |
 | **なぜその機能が要るのか** (公理からの演繹・優先順位の根拠) | [`docs/FIRST_PRINCIPLES_AUDIT.md`](docs/FIRST_PRINCIPLES_AUDIT.md) |
 | 長所/短所/改善点の人間向け評価 (ソクラテス式問答含む) | [`docs/ASSESSMENT.md`](docs/ASSESSMENT.md) |
