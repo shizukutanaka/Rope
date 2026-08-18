@@ -487,7 +487,27 @@ token** — now actually happens over the wire:
   CLI-unreachable `EcashManager` mutation API as §1.8 (§2.3) — no verb calls
   it against a real wallet.
 
-### 1.10 Emergency stop and escrow refund are not connected `[OPEN, latent; surfaces the moment A3+A9 are wired]`
+### 1.10 Emergency stop and escrow refund are not connected `[FIXED 2026-08-18 — type-checked; ecash tests not run, but the refund logic has tests]`
+
+> **Fixed.** `panic_stop` now refunds before it clears session files:
+> - `Session` gained `job_id: Option<String>` (`#[serde(default)]`, so existing
+>   `~/.rope/sessions/*.json` still load — 規範4). **This was the missing join
+>   key** this entry identified.
+> - `JobPolicy::accept` now receives the `job_id`, and the lender writes it to
+>   the session **before executing**. If that write fails the job still runs, but
+>   the operator is told that emergency-stop refunds will not work — it does not
+>   fail silently.
+> - `EcashManager::refund_escrows_for_job` refunds every escrow for that job,
+>   routed through `refund_escrow`, so the `Deposited | InProgress` guard
+>   excludes completed work **for free** — the claw-back attack this entry
+>   warned about cannot happen. A test asserts exactly that: two escrows on one
+>   job, one released, only the unreleased one is refunded.
+> - `panic_stop` treats refunding as best-effort: a failure is logged and the
+>   stop continues. **Stopping matters more than refunding.**
+>
+> **Still true**: `panic_stop` has no caller — no signal/Ctrl-C handler is wired
+> (§2.4). The mechanism is now correct and tested; what remains is deciding
+> where to trigger it from, which is a product decision, not a gap in this path.
 - Found by a systematic axiom-pair sweep (2026-08-08,
   [`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §4i), asking what
   *should* happen to the borrower's funds when the lender exercises their

@@ -884,7 +884,7 @@ fn run_earn(rate_sats_per_sec: u64, max_minutes: u32) -> Result<()> {
             next: "Noise 鍵交換 (暗号化された転送)"
         );
     }
-    serve_jobs(max_minutes)?;
+    serve_jobs(max_minutes, sess)?;
     Ok(())
 }
 
@@ -892,7 +892,7 @@ fn run_earn(rate_sats_per_sec: u64, max_minutes: u32) -> Result<()> {
 ///
 /// **1 接続ずつ順に処理する。** 並行実行は貸し手の資源を予測不能にするので、
 /// v1 では素直に直列にする (A9)。
-fn serve_jobs(max_minutes: u32) -> Result<()> {
+fn serve_jobs(max_minutes: u32, session: core::session::Session) -> Result<()> {
     use rope::net::mdns::{Advertisement, Mdns};
     use rope::net::transport::{serve_connection, Executed, JobPolicy};
 
@@ -933,11 +933,14 @@ fn serve_jobs(max_minutes: u32) -> Result<()> {
         /// 受け取った proof を貯める。`serve_connection` は `&self` しか渡さないので
         /// 内側可変性で受ける (1 接続ずつ直列なので競合はしない)。
         earned: std::cell::RefCell<core::ecash::EcashManager>,
+        /// 走行中のジョブを記録するセッション (A9→A7 の返金キー)。
+        session: std::cell::RefCell<core::session::Session>,
     }
     impl JobPolicy for LocalPolicy {
         fn accept(
             &self,
             _peer_pubkey: &str,
+            job_id: &str,
             model: &str,
             _prompt: &str,
             budget_sats: u64,
@@ -946,6 +949,18 @@ fn serve_jobs(max_minutes: u32) -> Result<()> {
             rope::net::inference::safe_model_stem(model).map_err(|e| e.to_string())?;
             if budget_sats == 0 {
                 return Err("予算が 0 sats".to_string());
+            }
+            // 走らせる前にセッションへ job_id を刻む。緊急停止した時に
+            // 借り手の escrow を引くキーはこれしかない (A9→A7)。
+            let mut sess = self.session.borrow_mut();
+            sess.job_id = Some(job_id.to_string());
+            if let Err(e) = sess.save() {
+                // 記録できなくても計算は続ける。ただし「緊急停止しても返金
+                // されない」状態なので、黙って進まない。
+                eprintln!(
+                    "⚠️  セッションに job_id を記録できません ({}) — 緊急停止時の返金が効きません",
+                    e
+                );
             }
             Ok(())
         }
@@ -1013,6 +1028,7 @@ fn serve_jobs(max_minutes: u32) -> Result<()> {
     let policy = LocalPolicy {
         max_output_tokens: 256,
         earned: std::cell::RefCell::new(core::ecash::load_ecash().unwrap_or_default()),
+        session: std::cell::RefCell::new(session),
     };
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(max_minutes as u64 * 60);

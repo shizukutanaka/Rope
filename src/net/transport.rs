@@ -109,9 +109,15 @@ pub struct Executed {
 /// 貸し手の受け入れ方針と実行。**A9 の判断はすべてここに集まる。**
 pub trait JobPolicy {
     /// この依頼を受けるか。`Err(理由)` なら `Reject` を返す。
+    ///
+    /// `job_id` を渡すのは、**受けると決めた側がそれを記録できるようにする**ため。
+    /// 貸し手が緊急停止した時に「今どのジョブを走らせていたか」が分からないと、
+    /// 借り手の escrow を返金できない (`A9→A7`,
+    /// `docs/SURPLUS_AND_GAPS.md` §1.10)。
     fn accept(
         &self,
         peer_pubkey: &str,
+        job_id: &str,
         model: &str,
         prompt: &str,
         budget_sats: u64,
@@ -212,7 +218,7 @@ pub fn serve_connection(
 
     // 4. 受けるか判断して、受けるなら走らせる
     let decision = policy
-        .accept(&peer_pubkey, &model, &prompt, budget_sats)
+        .accept(&peer_pubkey, &job_id, &model, &prompt, budget_sats)
         .and_then(|_| policy.execute(&model, &prompt, max_output_tokens));
 
     match decision {
@@ -399,7 +405,14 @@ mod tests {
         pub max_prompt: usize,
     }
     impl JobPolicy for RealPolicy {
-        fn accept(&self, _pk: &str, model: &str, prompt: &str, budget: u64) -> Result<(), String> {
+        fn accept(
+            &self,
+            _pk: &str,
+            _job: &str,
+            model: &str,
+            prompt: &str,
+            budget: u64,
+        ) -> Result<(), String> {
             if model != "demo" {
                 return Err(format!("知らないモデル: {}", model));
             }
@@ -719,8 +732,8 @@ mod payment_tests {
         received: &'static AtomicU64,
     }
     impl JobPolicy for PayingPolicy {
-        fn accept(&self, pk: &str, m: &str, p: &str, b: u64) -> Result<(), String> {
-            self.inner.accept(pk, m, p, b)
+        fn accept(&self, pk: &str, j: &str, m: &str, p: &str, b: u64) -> Result<(), String> {
+            self.inner.accept(pk, j, m, p, b)
         }
         fn execute(&self, m: &str, p: &str, n: u32) -> Result<Executed, String> {
             self.inner.execute(m, p, n)

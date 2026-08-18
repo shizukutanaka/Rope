@@ -925,6 +925,36 @@ impl EcashManager {
         Ok(())
     }
 
+    /// あるジョブに紐づく**未完了の** escrow を全て返金する (`A9→A7`)。
+    ///
+    /// 返り値は返金した件数。`refund_escrow` を呼ぶので、
+    /// **完了済み (`Released`) は自動的に除外される** — 貸し手が計算を終えてから
+    /// 緊急停止を撃って対価を取り戻す攻撃を防ぐガードがそこにある
+    /// (`docs/SURPLUS_AND_GAPS.md` §1.10)。
+    ///
+    /// 1 件の返金に失敗しても残りは試みる (緊急停止の経路から呼ばれるため、
+    /// 途中で諦める方が害が大きい)。
+    pub fn refund_escrows_for_job(&mut self, job_id: &str) -> Result<u32> {
+        let targets: Vec<String> = self
+            .escrows
+            .iter()
+            .filter(|e| {
+                e.job_id == job_id
+                    && matches!(e.state, EscrowState::Deposited | EscrowState::InProgress)
+            })
+            .map(|e| e.id.clone())
+            .collect();
+
+        let mut refunded = 0u32;
+        for id in targets {
+            match self.refund_escrow(&id) {
+                Ok(()) => refunded += 1,
+                Err(e) => tracing::warn!("escrow {} の返金に失敗: {}", id, e),
+            }
+        }
+        Ok(refunded)
+    }
+
     /// 係争を開始 (mint 調停待ち)
     pub fn dispute_escrow(&mut self, escrow_id: &str, reason: &str) -> Result<()> {
         let e = self
@@ -1680,6 +1710,61 @@ mod tests {
                 "{label} の解決後も total_sats == Σproofs"
             );
         }
+    }
+
+    /// §1.10 (`A9→A7`): 緊急停止で**未完了の** escrow だけが返金される。
+    /// 完了済み (`Released`) を返金してしまうと、貸し手が計算を終えてから
+    /// 緊急停止を撃って対価を取り戻せてしまう。
+    #[test]
+    fn refund_escrows_for_job_skips_completed_work() {
+        let mut m = funded_manager(2000);
+
+        let done = m
+            .open_escrow("job-A", "alice", "bob", "mint1", 300, "cond")
+            .unwrap();
+        let running = m
+            .open_escrow("job-A", "alice", "bob", "mint1", 200, "cond")
+            .unwrap();
+        let other = m
+            .open_escrow("job-B", "alice", "bob", "mint1", 100, "cond")
+            .unwrap();
+
+        // 1 件目は完遂済みにする
+        m.mark_escrow_in_progress(&done.id).unwrap();
+        m.release_escrow(&done.id, "proof").unwrap();
+
+        let before = m.wallet.total_sats;
+        let refunded = m.refund_escrows_for_job("job-A").unwrap();
+
+        assert_eq!(refunded, 1, "未完了の 1 件だけが返金される");
+        assert_eq!(
+            m.wallet.total_sats,
+            before + 200,
+            "返金されたのは進行中の 200 sats のみ"
+        );
+        assert_eq!(
+            proof_sum(&m),
+            m.wallet.total_sats,
+            "返金後も total_sats == Σproofs (§1.8)"
+        );
+
+        // 別ジョブの escrow は手つかず
+        assert!(
+            m.escrows.iter().any(|e| e.id == other.id),
+            "job-B の escrow は残る"
+        );
+        let _ = running;
+    }
+
+    /// 該当ジョブが無ければ何もしない (0 件返金)。
+    #[test]
+    fn refund_escrows_for_unknown_job_is_a_noop() {
+        let mut m = funded_manager(1000);
+        m.open_escrow("job-A", "alice", "bob", "mint1", 300, "cond")
+            .unwrap();
+        let before = m.wallet.total_sats;
+        assert_eq!(m.refund_escrows_for_job("存在しない").unwrap(), 0);
+        assert_eq!(m.wallet.total_sats, before);
     }
 
     #[test]

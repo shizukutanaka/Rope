@@ -189,6 +189,16 @@ pub struct Session {
     pub container_id: Option<String>,
     /// GPU監視PID
     pub monitor_pid: Option<u32>,
+    /// このセッションで受けているジョブの ID (`net::wire` の `job_id`)。
+    ///
+    /// **`panic_stop` が escrow を引くための唯一のキー** (`A9→A7`,
+    /// `docs/SURPLUS_AND_GAPS.md` §1.10)。ジョブを受けていない
+    /// (待機中の) セッションでは `None`。
+    ///
+    /// 既存の `~/.rope/sessions/*.json` を壊さないため `#[serde(default)]`
+    /// (規範4)。
+    #[serde(default)]
+    pub job_id: Option<String>,
 }
 
 impl Session {
@@ -204,6 +214,7 @@ impl Session {
             capability: None,
             container_id: None,
             monitor_pid: None,
+            job_id: None,
         }
     }
 
@@ -381,12 +392,53 @@ pub fn panic_stop() -> Result<()> {
         Err(e) => tracing::warn!("docker ps 失敗、コンテナ停止をスキップ: {}", e),
     }
 
+    // A9→A7: **セッションファイルを消す前に**、停止したジョブの escrow を返金する。
+    //
+    // 貸し手が緊急停止したとき、借り手には何の落ち度も無い。ここで返金しないと
+    // 借り手の資金は deadman (既定 60 分) が来るまで凍る
+    // (`docs/SURPLUS_AND_GAPS.md` §1.10)。
+    //
+    // best-effort: 返金に失敗しても停止そのものは続行する。止まることの方が
+    // 優先度が高い。
+    match refund_escrows_for_active_sessions() {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("緊急停止に伴い {} 件の escrow を返金", n),
+        Err(e) => tracing::warn!("escrow 返金に失敗 (停止は続行): {}", e),
+    }
+
     // セッションファイルを掃除（best-effort）。失敗しても停止フラグは維持。
     if let Err(e) = clear_session_files() {
         tracing::warn!("セッションファイル削除失敗: {}", e);
     }
 
     Ok(())
+}
+
+/// 現在のセッションに紐づく**未完了の** escrow を返金する (`A9→A7`)。
+///
+/// 返り値は返金した件数。
+///
+/// **完了済み (`Released`) の escrow は返金しない。** これは
+/// `EcashManager::refund_escrow` 側のガードで担保されている
+/// (`Deposited | InProgress` 以外は `bail`)。これが無いと、貸し手が
+/// 計算を終えてから緊急停止を撃って対価を取り戻す攻撃が成立してしまう
+/// (`docs/SURPLUS_AND_GAPS.md` §1.10)。
+fn refund_escrows_for_active_sessions() -> Result<u32> {
+    let sessions = list_sessions()?;
+    let job_ids: Vec<String> = sessions.iter().filter_map(|s| s.job_id.clone()).collect();
+    if job_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let mut ecash = crate::core::ecash::load_ecash()?;
+    let mut refunded = 0u32;
+    for job_id in &job_ids {
+        refunded += ecash.refund_escrows_for_job(job_id)?;
+    }
+    if refunded > 0 {
+        crate::core::ecash::save_ecash(&ecash)?;
+    }
+    Ok(refunded)
 }
 
 /// 停止が要求されているかチェック
