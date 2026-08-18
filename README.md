@@ -188,6 +188,7 @@ exit(1):     ロック競合・孤児セッション掃除失敗では出さな�
 - [`docs/RESEARCH_UPDATE_2026-07.md`](docs/RESEARCH_UPDATE_2026-07.md) — 上記の1ヶ月差分アップデート (新規論文3件・Iroh 1.0 等の新規検討事項)
 - [`docs/REACHABILITY_AUDIT.md`](docs/REACHABILITY_AUDIT.md) — `#![allow(dead_code)]` 配下 161 関数の到達可能性監査 (次回削除候補 29件)
 - [`docs/SURPLUS_AND_GAPS.md`](docs/SURPLUS_AND_GAPS.md) — 過剰(過去に削除/保持判断したもの)と不足(未実装・要判断)を機械可読形式で一覧化。後続の AI エージェント向け
+- **[`docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md`](docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md) — 📘 推論を実際に走らせる手順書 (v1 の第1項目)**
 - **[`docs/V1_SCOPE.md`](docs/V1_SCOPE.md) — 🎯 v1 で何を作り何を作らないか (Musk のアルゴリズムによる要件削減の決定)**
 - [`docs/FIRST_PRINCIPLES_AUDIT.md`](docs/FIRST_PRINCIPLES_AUDIT.md) — 製品定義の公理から機能の要否を演繹した監査 (上記の帰納的一覧と対をなす)
 - [`docs/RESEARCH_UPDATE_2026-08.md`](docs/RESEARCH_UPDATE_2026-08.md) — 最新論文・技術動向 (Hollow-LLM 攻撃、推論 crate 選定、Iroh 1.0、NVIDIA CC 本番化)

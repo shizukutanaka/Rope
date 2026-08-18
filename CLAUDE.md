@@ -88,7 +88,7 @@ W7/W8 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashMa
 
 | 順 | やること | ブロッカー | 手引き |
 |---|--------|-----------|-------|
-| **1** | **A3+A9: プロンプト推論を実際に走らせる + プロセス隔離** (不可分) | `build` (**mistral.rs**) | 最小条件は `FIRST_PRINCIPLES_AUDIT.md` §8 (CPU・非決定論的・非TEE・**ローカルモデルパスのみ**)。置き場所は `net/inference.rs` + feature 分離。隔離は pure Rust crate (`sandbox-rs` 等) で足りる — **`Inference` のみなら SSRF も pickle RCE も無い** (`RESEARCH_UPDATE_2026-08.md` §4j, §4l) |
+| **1** | **A3+A9: プロンプト推論を実際に走らせる + プロセス隔離** (不可分) | `build` (**mistral.rs**) | **📘 手順書: [`docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md`](docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md)** (配線点 3 箇所・実装順序・DoD)。最小条件は `FIRST_PRINCIPLES_AUDIT.md` §8 (CPU・非決定論的・非TEE・**ローカルモデルパスのみ**)。置き場所は `net/inference.rs` + feature 分離。隔離は pure Rust crate (`sandbox-rs` 等) で足りる — **`Inference` のみなら SSRF も pickle RCE も無い** (`RESEARCH_UPDATE_2026-08.md` §4j, §4l) |
 | **2** | **A5 を `rope run` に結線** (トークン不要決済 = 唯一の差別化) | `build` (k256) | [`CASHU_BDHKE_IMPLEMENTATION_READINESS.md`](docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md)。**DLEQ (NUT-12) を含めること** — LAN では mint 到達性が保証されず、オフライン検証が必須 (§4c) |
 | **3** | **A1: mDNS で LAN のピアを実際に見つける** (NAT 越えは v2) | `build` (Iroh) | [`P2P_IMPLEMENTATION_READINESS.md`](docs/P2P_IMPLEMENTATION_READINESS.md)。**Iroh の `MdnsDiscovery` はデフォルト有効・リレー不要**で LAN に必要十分 (§4d) |
 | **4** | **`A9→A7` の欠落を直す** — 緊急停止時に未完了 escrow を返金 | なし (要ビルド検証) | `SURPLUS_AND_GAPS.md` §1.10。**完了済み escrow は返金しない**こと (貸し手の攻撃面になる) |
@@ -147,6 +147,7 @@ W7/W8 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashMa
 | 過不足の機械可読な一覧 (§アンカー付き) | [`docs/SURPLUS_AND_GAPS.md`](docs/SURPLUS_AND_GAPS.md) |
 | **なぜその機能が要るのか** (公理からの演繹・優先順位の根拠) | [`docs/FIRST_PRINCIPLES_AUDIT.md`](docs/FIRST_PRINCIPLES_AUDIT.md) |
 | 長所/短所/改善点の人間向け評価 (ソクラテス式問答含む) | [`docs/ASSESSMENT.md`](docs/ASSESSMENT.md) |
+| **推論をどう実装するか (v1 の順序1)** | **[`docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md`](docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md)** |
 | 実 P2P をどう実装するか | [`docs/P2P_IMPLEMENTATION_READINESS.md`](docs/P2P_IMPLEMENTATION_READINESS.md) |
 | 実 BDHKE をどう実装するか | [`docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md`](docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md) |
 | どのコードが CLI から到達するか | [`docs/REACHABILITY_AUDIT.md`](docs/REACHABILITY_AUDIT.md) |

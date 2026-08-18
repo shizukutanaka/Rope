@@ -128,7 +128,7 @@ A1 (発見) も A3 (推論) も競合が既に出荷している能力であり�
 
 Musk の順序を守る。①②が終わったので、ここから作る:
 
-1. **A3: プロンプト推論を実際に走らせる** — `net/inference.rs` + `inference` feature、
+1. **A3: プロンプト推論を実際に走らせる** — **📘 手順書: [`A3_INFERENCE_IMPLEMENTATION_READINESS.md`](A3_INFERENCE_IMPLEMENTATION_READINESS.md)**。`net/inference.rs` + `inference` feature、
    mistral.rs (pure Rust / CPU 可 / Candle 0.9.2)。**ローカルモデルパスのみ**。
    同時に **A9 のプロセス隔離** (不可分、監査 §4)。
 2. **A5 を `rope run` に結線** — ecash が実際に動く。**DLEQ (NUT-12) を含める**

@@ -39,6 +39,18 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Added
 
+- **📘 `docs/A3_INFERENCE_IMPLEMENTATION_READINESS.md` — v1 第1項目の実行手順書** —
+  P2P/BDHKE には手順書があったが、**最も重い A3 (型すら存在しない唯一の公理) には
+  無かった**。既存 runbook と同形式で作成。**配線点 3 箇所を grep 確認して特定**:
+  (a) `main.rs:400-403` の `capability_boundary!` が**自ら「next: 実 GPU 推論実行」と
+  宣言している**箇所、(b) `main.rs:226` の `sample_haiku_response()` (デモの固定文字列)、
+  (c) `intent.rs:603` の `resolve()` が返す `ExecutionPlan` を誰も実行しない点。
+  **A9 と 1 スコープで扱う** (実行させることは隔離を要求する)。
+  **`Train`/`Retrieve` を v1 から削除したことで A9 の要求が大幅に軽くなる** —
+  SSRF 面も pickle RCE 面も消滅し、**gVisor 不要で pure Rust の隔離 crate で足りる**
+  (= `A9⊥A8` は「A8 を取る」で決着)。
+  **DoD の最強シグナル**: **`rope` 無引数デモが実推論を表示し、README の
+  「シミュレーション」注記を外せること** — 外せないなら A3 は未完了。
 - **🎯 `docs/V1_SCOPE.md` — Musk のアルゴリズムで要件を削り、出荷できる v1 を確定** —
   ①要件を疑え → ②削除せよ → ③単純化 → ④高速化 → ⑤自動化 の順序を守って適用。
   **最初に削除したのはプロセスそのもの**: `830d8c4` 以降の実測が
