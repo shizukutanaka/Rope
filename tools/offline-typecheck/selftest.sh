@@ -48,11 +48,14 @@ expect_caught() {
 
 echo "── 注入したエラーを検出できるか ──"
 
+# アンカーは `Workload` の唯一の variant の doc comment。
+# variant 構成を変えたらここも直すこと — 変えたまま放置すると
+# 「注入スクリプト自体が失敗」と報告される (黙って PASS しない)。
 expect_caught "match 網羅性" "E0004" '
 import os
 p=os.environ["TARGET"]; s=open(p,encoding="utf-8").read()
-old="    /// Batch inference job (many prompts)."
-assert old in s
+old="    /// Single inference call (prompt \u2192 completion)."
+assert old in s, "アンカーが見つからない (Workload の構成が変わった?)"
 open(p,"w",encoding="utf-8").write(s.replace(old,"    Injected { x: u32 },\n"+old,1))
 '
 

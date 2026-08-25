@@ -196,6 +196,73 @@ type-checker located all six broken test fixtures by exact line, and surfaced
 `unused_mut`, `unused_assignments`). Since CI runs `RUSTFLAGS="-D warnings"`,
 those would have been CI failures. Fixed before pushing.
 
+### 1.15 Payment was persisted *after* it was sent — a window that destroys funds `[FIXED 2026-08-18]`
+
+Found by turning ① on my own claim that "everything left is crate-blocked".
+The order in the freshly-shipped A5 path was **spend (in memory) → send → persist**:
+
+- **Crash between send and persist** left the on-disk wallet holding proofs the
+  peer had already banked. Re-spending them hits the peer's nullifier store as a
+  double-spend, so the wallet accumulates **tokens that display a balance nobody
+  will accept** — `total_sats` drifts from real value.
+- **The send error was swallowed** (`let _ = write_frame(...)`). Tokens were
+  consumed, `Ok` was returned, the wallet was saved, and X sats vanished
+  silently. That is a 規範6 violation, not just a bug.
+
+**Fix — at-most-once spend: spend → persist → send.**
+- `main.rs` persists inside the `pay` closure, immediately after `spend_proofs`.
+  **If the save fails, nothing is sent** — sending while the disk still shows the
+  proof unspent is precisely how the double-spend trap gets set.
+- `transport::request_job` now returns `(Executed, PaymentDelivery)` where
+  `PaymentDelivery` is `NotAttempted | Sent | Failed`. The borrower prints
+  「支払いの送信に失敗しました — {X} sats は消費済みで取り戻せません」 on
+  `Failed`. The loss is real and is reported as real.
+- Trade-off, stated: a crash now costs at most the current payment, instead of
+  poisoning the wallet with unspendable tokens. **That is the correct direction
+  for bearer money.**
+- Tests (run for real): payment success reports `Sent`, an empty payment reports
+  `NotAttempted`.
+
+### 1.16 TOFU was never wired into the live transport `[FIXED 2026-08-18]`
+
+`V1_SCOPE.md` §3 listed "A2 信頼 = TOFU のみ / 実装済み". The state machine was
+implemented; **the path that actually runs consulted none of it**:
+
+- `main.rs::tofu_verifier` accepted **any** well-formed Ed25519 key. No
+  `trust_store` lookup, no pinning.
+- The borrower **discarded** the `advertised_pubkey` it learned over mDNS when
+  building its candidate list, so it never checked that the peer answering on
+  that address was the peer it had discovered.
+- `LocalPolicy` held no `PairManager`: `accept_mode` (`off` / `contacts-only`)
+  and `trust_store` were **read by nothing** on the lender side.
+- Consequently `PairStats::tofu_accepts` and `pubkey_mismatch_rejections` were
+  only ever touched by `complete_handshake` (pair.rs:882,906), which **no verb
+  reaches** — both counters were permanently zero.
+
+**Fix:**
+- New `PairManager::transport_trust_gate(pubkey, display_name) -> Result<TrustLevel>`
+  — the trust half of `complete_handshake`, usable without a Noise session.
+  Same rules: `Off` refuses; a known key is a reunion; `ContactsOnly` refuses
+  strangers (matching `begin_handshake` pair.rs:788); otherwise TOFU records the
+  key and increments `tofu_accepts`. Documented as a parallel implementation to
+  be merged with `complete_handshake` when Noise lands.
+- `request_job` gained `expected_pubkey: Option<&str>`; the borrower passes the
+  advertised key and aborts with `UntrustedPeer` if the `Hello` disagrees —
+  **before sending the prompt**. Mismatches increment
+  `pubkey_mismatch_rejections`, which now finally moves.
+- `LocalPolicy` carries a `PairManager` and runs the gate at the top of
+  `accept()`, so a rejection becomes the `Reject` reason the borrower sees.
+- On success the lender calls `record_job_outcome(pubkey, true)`, which makes the
+  existing Unknown→Familiar promotion (3 successful jobs, pair.rs:1160) live for
+  the first time.
+- `TrustLevel` gained a `Display` impl (初対面 / 顔見知り / 信頼済み /
+  自分の端末) so the CLI never prints Debug names.
+
+⚠️ **What this still does not do**: proving possession of a key is not proving
+identity. A first-contact peer is accepted by definition — that is what TOFU
+means. **The 6-digit verify code remains the only defence against an attacker
+who is present from the very first connection** (`SECURITY.md`).
+
 ### 1.13 Two resource bugs in the inference path, found by re-reading what shipped `[FIXED 2026-08-18]`
 
 Found by applying ③/④ to `net/inference.rs` **after** it worked — which is the

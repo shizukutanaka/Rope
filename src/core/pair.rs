@@ -159,6 +159,19 @@ pub enum TrustLevel {
     OwnDevice,
 }
 
+impl std::fmt::Display for TrustLevel {
+    /// ユーザー向け日本語。Debug 形式 (`Unknown` 等) を画面に出さない
+    /// — `AcceptMode`/`Privacy` と同じ規律。
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TrustLevel::Unknown => write!(f, "初対面"),
+            TrustLevel::Familiar => write!(f, "顔見知り"),
+            TrustLevel::Trusted => write!(f, "信頼済み"),
+            TrustLevel::OwnDevice => write!(f, "自分の端末"),
+        }
+    }
+}
+
 /// 信頼ストアエントリ
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrustedIdentity {
@@ -964,6 +977,58 @@ impl PairManager {
     }
 
     /// ユーザーが明示的に信頼 (Trusted にアップグレード)
+    /// 転送経路 (`net::transport`) の信頼ゲート — `complete_handshake` の
+    /// 信頼判断部分の平行実装。
+    ///
+    /// v1 の転送には Noise セッションが無いため、`complete_handshake`
+    /// (握手セッション前提) をそのまま使えない。**信頼の規則自体は同一**:
+    ///
+    /// - 受付停止 (`AcceptMode::Off`) → 拒否
+    /// - `trust_store` に既知の鍵 → 再会として受理 (現レベルを返す)
+    /// - `ContactsOnly` で未知の鍵 → 拒否 (`begin_handshake` と同じ規則)
+    /// - それ以外で `allow_tofu` → **初回として記録し受理** (`tofu_accepts` 加算)
+    /// - `allow_tofu` 無効で未知 → 拒否
+    ///
+    /// ⚠️ この受理が証明するのは「この鍵を前に見た/初めて見た」ことだけ。
+    /// 鍵の持ち主が意図した相手かは**確認コードの目視照合**でしか分からない
+    /// (`SECURITY.md`)。Noise 導入時に `complete_handshake` と統合すること。
+    pub fn transport_trust_gate(&mut self, pubkey: &str, display_name: &str) -> Result<TrustLevel> {
+        if pubkey.is_empty() {
+            anyhow::bail!("公開鍵が空");
+        }
+        if self.config.accept_mode == AcceptMode::Off {
+            anyhow::bail!("受付停止中 (accept: off)");
+        }
+        if let Some(entry) = self.trust_store.get_mut(pubkey) {
+            entry.last_paired = Utc::now();
+            self.updated_at = Utc::now();
+            return Ok(entry.trust_level);
+        }
+        if self.config.accept_mode == AcceptMode::ContactsOnly {
+            anyhow::bail!("信頼ストア外のピア拒否 (accept: contacts-only)");
+        }
+        if !self.config.allow_tofu {
+            anyhow::bail!("TOFU 無効、未知ピア拒否");
+        }
+        let ident = TrustedIdentity {
+            pubkey: pubkey.to_string(),
+            display_name: display_name.to_string(),
+            first_paired: Utc::now(),
+            last_paired: Utc::now(),
+            pair_count: 1,
+            trust_level: TrustLevel::Unknown,
+            note: None,
+            capability_proven: false,
+            challenged_at: None,
+            successful_jobs: 0,
+            failed_jobs: 0,
+        };
+        self.trust_store.insert(pubkey.to_string(), ident);
+        self.stats.tofu_accepts += 1;
+        self.updated_at = Utc::now();
+        Ok(TrustLevel::Unknown)
+    }
+
     pub fn mark_trusted(&mut self, pubkey: &str, note: Option<String>) -> Result<()> {
         let entry = self
             .trust_store
@@ -1287,6 +1352,95 @@ mod tests {
     #![allow(clippy::redundant_clone)]
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
+
+    // ------------------------------------------------------------------
+    // transport_trust_gate — 転送経路の TOFU
+    // ------------------------------------------------------------------
+
+    /// 受付停止なら誰も通さない。
+    #[test]
+    fn transport_gate_refuses_when_accepting_is_off() {
+        let mut m = PairManager::default();
+        m.config.accept_mode = AcceptMode::Off;
+        assert!(m.transport_trust_gate("abcd", "alice").is_err());
+        assert_eq!(m.stats.tofu_accepts, 0, "拒否したのに TOFU を数えない");
+    }
+
+    /// contacts-only は信頼ストア外を拒否する (`begin_handshake` と同じ規則)。
+    #[test]
+    fn transport_gate_refuses_strangers_in_contacts_only() {
+        let mut m = PairManager::default();
+        m.config.accept_mode = AcceptMode::ContactsOnly;
+        let err = m.transport_trust_gate("abcd", "alice").unwrap_err();
+        assert!(
+            format!("{err}").contains("信頼ストア外"),
+            "理由が利用者に分かる: {err}"
+        );
+        assert!(m.trust_store.is_empty(), "拒否した鍵を登録しない");
+    }
+
+    /// 既定 (lan-only + TOFU 有効) では初対面を受理し、記録する。
+    #[test]
+    fn transport_gate_accepts_a_stranger_once_and_records_it() {
+        let mut m = PairManager::default();
+        assert!(m.config.allow_tofu, "既定で TOFU 有効という前提のテスト");
+
+        let level = m.transport_trust_gate("abcd", "alice").unwrap();
+        assert_eq!(level, TrustLevel::Unknown, "初対面は Unknown");
+        assert_eq!(m.stats.tofu_accepts, 1);
+        let entry = m.trust_store.get("abcd").expect("信頼ストアに入る");
+        assert_eq!(entry.display_name, "alice");
+        assert_eq!(entry.trust_level, TrustLevel::Unknown);
+    }
+
+    /// 再訪は受理するが、TOFU の初回カウントは増やさない。
+    #[test]
+    fn transport_gate_does_not_double_count_a_returning_peer() {
+        let mut m = PairManager::default();
+        m.transport_trust_gate("abcd", "alice").unwrap();
+        let level = m.transport_trust_gate("abcd", "alice").unwrap();
+        assert_eq!(level, TrustLevel::Unknown);
+        assert_eq!(m.stats.tofu_accepts, 1, "初回の 1 回だけ数える");
+        assert_eq!(m.trust_store.len(), 1);
+    }
+
+    /// TOFU を切っていれば未知ピアは通らない。既知ピアは通る。
+    #[test]
+    fn transport_gate_honours_disabled_tofu() {
+        let mut m = PairManager::default();
+        m.config.allow_tofu = false;
+        assert!(m.transport_trust_gate("abcd", "alice").is_err());
+
+        // 明示的に信頼済みなら TOFU 無効でも通る
+        m.trust_store.insert(
+            "abcd".to_string(),
+            TrustedIdentity {
+                pubkey: "abcd".to_string(),
+                display_name: "alice".to_string(),
+                first_paired: Utc::now(),
+                last_paired: Utc::now(),
+                pair_count: 1,
+                trust_level: TrustLevel::Trusted,
+                note: None,
+                capability_proven: false,
+                challenged_at: None,
+                successful_jobs: 0,
+                failed_jobs: 0,
+            },
+        );
+        assert_eq!(
+            m.transport_trust_gate("abcd", "alice").unwrap(),
+            TrustLevel::Trusted,
+            "既知ピアは現在の信頼レベルで通る"
+        );
+    }
+
+    /// 空の公開鍵は名乗りとして無効。
+    #[test]
+    fn transport_gate_refuses_an_empty_key() {
+        let mut m = PairManager::default();
+        assert!(m.transport_trust_gate("", "alice").is_err());
+    }
 
     fn test_endpoint(port: u16) -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)), port)

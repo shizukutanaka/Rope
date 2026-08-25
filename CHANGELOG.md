@@ -57,6 +57,46 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Fixed
 
+- **🔴 §1.15 支払いの永続化順序が逆だった — 資金破壊の窓を塞いだ**
+  (`src/main.rs`, `src/net/transport.rs`)。**main.rs は型検査のみ / transport の
+  テスト 58 件は実行して PASS**。
+  「残りは crate 待ちだけ」という自分の主張に①を当てて精査して見つけた。
+  - 旧順序は **spend(メモリ) → send(エラー握り潰し) → persist**。
+    send と persist の間で落ちると、ディスクには送信済み proof が残る →
+    再送すれば相手の nullifier ストアが二重使用として拒否 →
+    **「表示されるが誰も受け取らないトークン」がウォレットに溜まる**
+  - さらに `let _ = write_frame(...)` で**送信失敗が消えていた**。
+    トークンは消費済みなのに成功が返り、X sats が黙って消える (規範6 違反)
+  - **修正 = at-most-once spend: spend → persist → send。**
+    保存に失敗したら**送らない** (ディスク上は未使用のままの proof を渡すのが
+    まさに二重使用の罠を仕掛ける行為)
+  - `request_job` の戻り値を `(Executed, PaymentDelivery)` に変更
+    (`NotAttempted`/`Sent`/`Failed`)。`Failed` なら
+    「支払いの送信に失敗 — {X} sats は消費済みで取り戻せません」と**正直に表示**
+  - トレードオフを明記: クラッシュ時に失うのは今回の額だけになった。
+    **bearer money にとってはこちらが正しい倒れ方**
+- **🔴 §1.16 TOFU がライブ経路で一切効いていなかった — 実結線**
+  (`src/core/pair.rs`, `src/net/transport.rs`, `src/main.rs`)。
+  `V1_SCOPE.md` §3 は「A2 信頼 = TOFU のみ / 実装済み」としていたが、
+  **状態機械は実装済みでも、実際に走る経路は何も参照していなかった**。
+  - `tofu_verifier` は**どんな鍵でも受理**。借り手は mDNS で得た
+    `advertised_pubkey` を候補リストで**捨てて**いた。貸し手の `LocalPolicy` は
+    `PairManager` を持たず `accept_mode` も `trust_store` も未参照
+  - 結果 `tofu_accepts` / `pubkey_mismatch_rejections` は
+    **到達不能な `complete_handshake` でしか増えず、永久にゼロ**だった
+  - 新設 `PairManager::transport_trust_gate` — `complete_handshake` の信頼判断を
+    Noise セッション無しで使える形にしたもの。規則は同一
+    (Off 拒否 / 既知は再会 / ContactsOnly は他人を拒否 / それ以外は TOFU 記録)
+  - `request_job` に `expected_pubkey` を追加。広告と違う鍵の相手には
+    **プロンプトを送る前に**中断し、`pubkey_mismatch_rejections` を加算
+  - 貸し手は `accept()` 冒頭でゲートを通し、拒否理由がそのまま `Reject` になる。
+    成功時は `record_job_outcome` を呼ぶので、既存の Unknown→Familiar 昇格
+    (成功 3 件) が**初めて動く**
+  - `TrustLevel` に `Display` を追加 (初対面/顔見知り/信頼済み/自分の端末) —
+    Debug 名を画面に出さない既存の規律に合わせた
+  - ⚠️ **鍵の所持証明は身元証明ではない。** 初回接続から居座る攻撃者に対しては
+    **6 桁の確認コードが依然として唯一の防御**である (`SECURITY.md`)
+
 - **③④: 出荷後の `net/inference.rs` を読み直して資源バグを 2 件修正**
   (`SURPLUS_AND_GAPS.md` §1.13)。**型検査のみ**だが、数値テストは実行して PASS
   (演算結果が変わっていないことの確認)。
