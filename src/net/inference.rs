@@ -1264,10 +1264,14 @@ mod tests {
         let c = tiny_config(false);
         let bytes = build_checkpoint(c, |name, n| match name {
             "emb" => {
+                // token 1 の埋め込みを [0,2,0,0] にする (dim=4)。
+                // 添字を名前で書くのは clippy::identity_op 回避も兼ねる
+                // (`1 * 4 + 1` は「1 倍」が無意味だと指摘される)。
+                let (token, dim) = (1usize, 4usize);
                 let mut v = vec![0.0; n];
-                v[1 * 4 + 1] = 2.0;
+                v[token * dim + 1] = 2.0;
                 v
-            } // token1 = [0,2,0,0]
+            }
             "rms_att" | "rms_ffn" | "rms_final" => vec![1.0; n],
             "wcls" => identity(n, 4),
             _ => vec![0.0; n],

@@ -4,9 +4,19 @@
 
 ```sh
 tools/offline-typecheck/check.sh      # 型検査: src/ 全体 (約 2.5 秒)
-tools/offline-typecheck/run-tests.sh  # テストを**実際に実行** (依存ゼロの 4 モジュール)
+tools/offline-typecheck/run-tests.sh  # テスト 358 件を**実際に実行**
+tools/offline-typecheck/lint.sh       # clippy (registry 不要)
 tools/offline-typecheck/selftest.sh   # ハーネス自体の健全性検証
 ```
+
+**`clippy-driver` は toolchain 同梱で registry を必要としない。**
+`cargo clippy` が使えなくても、rustc と同じ引数で直接叩けば lint できる。
+🔴 **ただし CI は clippy を 1.75 に固定している。**ここの clippy は最新版
+(1.94 系) なので、**ここで出た lint が CI では出ない**ことがあり、
+**その提案に従うと MSRV 1.75 を壊す**ことがある。
+実例: `clippy::manual_is_multiple_of` が勧める `is_multiple_of` は
+**Rust 1.87 で安定化**した API で、1.75 ではコンパイルできない。
+`lint.sh` は既定でその種の lint を抑止する (`ROPE_LINT_ALL=1` で全表示)。
 
 **`run-tests.sh` は型検査ではなく実行である。**
 **`src/` のテスト 358 件すべてがこの環境で実際に走る** (2026-08-18〜)。
@@ -105,8 +115,10 @@ variant を消したら網羅性エラーで即座に分かる。
 5. **`--features http` の経路** — `reqwest`/`tokio` はスタブ化していない。
 6. **MSRV 1.75 適合** — ここの rustc は 1.94。1.94 で通っても
    1.75 で通るとは限らない (これは CI でしか確かめられない)。
-7. **clippy の lint** — `clippy::redundant_clone` 等の clippy 固有の lint は
-   出ない (rustc 本体の警告は出る、上記)。
+7. **clippy のバージョン差** — `lint.sh` で clippy は**走る**ようになったが、
+   ここは 1.94 系、CI は **1.75 固定**。新しい lint が余計に出たり、
+   逆に 1.75 だけの挙動を見落としたりする。**提案が 1.75 に存在する API か
+   必ず確認すること。**
 8. **スタブと実 crate の挙動差** — テストは走るが、走っているのは
    **スタブを通した挙動**である。最も大きい既知の差:
    - **`chrono::DateTime` の JSON 表現**。実 serde は RFC3339 文字列、

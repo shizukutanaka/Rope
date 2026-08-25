@@ -269,6 +269,21 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Added
 
+- **clippy がこの環境で走るようになった** (`tools/offline-typecheck/lint.sh`)。
+  `clippy-driver` は toolchain 同梱で **registry を必要としない** —
+  セッション冒頭の `which` 出力に最初から居たのに、一度も使っていなかった。
+  - lib / lib tests / bin / bin tests の 4 ターゲットに掛ける
+  - **実際の指摘を 1 件見つけて直した**: `net/inference.rs` のテストにあった
+    `v[1 * 4 + 1]` (`clippy::identity_op`)。この lint は 1.75 にもあるので
+    **そのまま push すれば CI で落ちていた**
+  - 🔴 **CI との重要な差を発見・記録**: ここの clippy は 1.94 系だが
+    **CI は 1.75 固定**。`clippy::manual_is_multiple_of` が勧める
+    `is_multiple_of` は **Rust 1.87 で安定化**した API で、**1.75 では
+    コンパイルできない**。CI の clippy 1.75 にはこの lint 自体が無い。
+    → **提案を機械的に適用すると MSRV が壊れる。**
+    `lint.sh` は既定でこの種の lint を抑止する (`ROPE_LINT_ALL=1` で全表示)
+  - `.githooks/pre-push` を 4 段から 5 段に (clippy を追加)
+
 - **🎯 `src/` のテスト 358 件が、この環境で実際に走るようになった**
   (`tools/offline-typecheck/`)。**長らく「`core/` のテストは走らない」と
   書いていたが、それが誤りだった。**

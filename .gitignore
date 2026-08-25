@@ -21,3 +21,4 @@ Thumbs.db
 # オフライン型検査ハーネスの中間生成物
 tools/offline-typecheck/.build/
 tools/offline-typecheck/.build-tests/
+tools/offline-typecheck/.build-lint/

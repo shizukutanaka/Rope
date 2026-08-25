@@ -70,8 +70,18 @@ real crates. Known differences that matter:
 - 🔴 **Nothing cryptographic is verified.** `blake3` is not BLAKE3, `ed25519` is
   not Ed25519, `rand` is not a CSPRNG. They preserve "different input →
   different output" so logic tests can run, and nothing more.
-- Still invisible: clippy lints, MSRV-1.75 compatibility (local rustc is 1.94),
-  the `--features http` path, `json!` contents, clap argument specs.
+- **clippy now runs** (`tools/offline-typecheck/lint.sh`) — `clippy-driver`
+  ships with the toolchain and needs no registry. It found a real
+  `identity_op` in the inference tests that **would have failed CI**.
+  🔴 **But local clippy is 1.94 while CI pins 1.75.** Its
+  `manual_is_multiple_of` suggestion recommends `is_multiple_of`, an API
+  **stabilised in Rust 1.87** — following it would break MSRV 1.75, and CI's
+  clippy 1.75 does not even have that lint. `lint.sh` suppresses that class by
+  default. **Never apply a clippy suggestion without checking the API exists in
+  1.75.**
+- Still invisible: **MSRV-1.75 compatibility itself** (local rustc is 1.94 and
+  rustup cannot fetch 1.75 without network), the `--features http` path
+  (reqwest/tokio unstubbed), `json!` contents, clap argument specs.
 
 **"The harness is green" ≠ "it compiles" ≠ "it works" ≠ "it is safe".**
 CI remains the shipping gate.
