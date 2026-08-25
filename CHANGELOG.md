@@ -17,7 +17,7 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
   「ブロッカー: なし」を訂正** — v1 実装順の項目 4 は「ビルド以外のブロッカー無し」と
   記録していたが、grep で 2 点確認して誤りと判明:
   - **良い方の発見**: 「完了済み escrow は返金しない」ガード (貸し手の
-    claw-back 攻撃対策) は `refund_escrow` (`ecash.rs:830`) に**既に存在する** —
+    claw-back 攻撃対策) は `refund_escrow` (`ecash.rs:905`) に**既に存在する** —
     `panic_stop` 側で再実装する必要はなく、修正は当初想定より小さい
   - **悪い方の発見**: その `refund_escrow` こそ §1.8 の壊れた経路
     (`total_sats` だけ加算し proof を復元しない、`ecash.rs:837`)。
@@ -33,7 +33,7 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 - **返金経路が `wallet.total_sats` を増やすが proof を復元しない潜在的不整合を
   発見・記録** — ecash のマネー経路を精読した結果、`close_stream`
-  (`ecash.rs:1030`) / `refund_escrow` (`ecash.rs:837`) / `resolve_dispute`
+  (`ecash.rs:1030`) / `refund_escrow` (`ecash.rs:905`) / `resolve_dispute`
   (`ecash.rs:883,890`) が返金時に scalar (`total_sats`) だけを増やし proof
   バケットを復元しないことを確認。`lock_funds` は proof 合計をチェックするため、
   実 ecash 結線後は「表示されるが再使用できない残高」になる。現状 ecash API は
@@ -296,6 +296,25 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
   「実装者が頭に入れねばならない文書数」だった
 
 ### Added
+
+- **⑤ `tools/check-doc-anchors.sh` — file:line アンカーの正しさをゲートで守る**
+  (`SURPLUS_AND_GAPS.md` §1.18)。
+  - 規範3 は「発見は file:line で記録する。**将来の実装者が必ず参照する**」と
+    言うが、**その前提を誰も検証していなかった**。実測すると
+    **検証可能な 84 件のうち 48 件 (57%) が誤った行を指していた**
+  - 本セッションで `src/` に 5,800 行以上入れたので当然の結果。一度きりの事故
+    ではなく**編集のたび必ず起きる**。だから注意力ではなく**機械で守らせる**
+  - `.githooks/pre-push` の 6/7 として **push をブロックする** (決定的で
+    ネットワーク不要なので助言ではなく門にした)。`--fix` で一括修正
+  - ⚠️ **このツール自身が 2 度、誤った書き換えをしかけた** (どちらも修正済):
+    (1) 同じアンカー文字列が別シンボルを指して複数箇所にあるとき全置換で
+    **正しい方を壊した** (実際に検査が振動して発覚) → 位置指定に変更。
+    (2) 「直後のシンボルを優先」にしたら `` `sym` (`anchor`) `` 記法で
+    **隣の項目のシンボル**を掴み、誤った行番号を書き込んだ → 方向を問わず
+    隣接 30 字以内のみ採用に変更
+  - **設計原則にした**: 誤って書き換えるより「検証できない」と言う方を選ぶ。
+    未検証は正直だが、誤った書き換えは嘘になる。38 件は検証していないと
+    毎回表示する (黙って通さない)
 
 - **🔴 `tools/offline-typecheck/check-deps-msrv.sh` — CI を有効化すると
   落ちることを発見した** (`SURPLUS_AND_GAPS.md` §1.17)。
@@ -608,7 +627,7 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
   無かった**。既存 runbook と同形式で作成。**配線点 3 箇所を grep 確認して特定**:
   (a) `main.rs:400-403` の `capability_boundary!` が**自ら「next: 実 GPU 推論実行」と
   宣言している**箇所、(b) `main.rs:226` の `sample_haiku_response()` (デモの固定文字列)、
-  (c) `intent.rs:603` の `resolve()` が返す `ExecutionPlan` を誰も実行しない点。
+  (c) `intent.rs:348` の `resolve()` が返す `ExecutionPlan` を誰も実行しない点。
   **A9 と 1 スコープで扱う** (実行させることは隔離を要求する)。
   **`Train`/`Retrieve` を v1 から削除したことで A9 の要求が大幅に軽くなる** —
   SSRF 面も pickle RCE 面も消滅し、**gVisor 不要で pure Rust の隔離 crate で足りる**
@@ -755,9 +774,9 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
   (13) **🔴 公理ペアの体系的スイープで `A9 → A7` の欠落した辺を発見** (コードで確認) —
   これまでの公理間関係は逐次的に見つけたもので網羅確認をしていなかった (A9 自体が
   見落としだった)。A9 を軸に確認した結果、**緊急停止と返金が接続していない**ことが判明:
-  `panic_stop` (`session.rs:360-390`) は `clear_session_files()` (`session.rs:385`) を呼ぶが、
+  `panic_stop` (`session.rs:399-429`) は `clear_session_files()` (`session.rs:385`) を呼ぶが、
   これが消すのは `session_dir()` 配下の `.json` のみで **`ecash.json` は対象外**。
-  escrow の自動返金は `process_deadman` (`ecash.rs:900-918`) の `deadman_at < now` 頼みで
+  escrow の自動返金は `process_deadman` (`ecash.rs:1015-1033`) の `deadman_at < now` 頼みで
   既定 **60 分** (`ecash.rs:341,366,677`) → **貸し手が緊急停止しても借り手の資金は
   最大 60 分ロックされ、A7 (中断しても双方が損しない) が A9 の経路では成立しない**。
   A7 の返金は*時間切れ*を想定した設計で、**貸し手の意図的停止という A9 由来の中断は

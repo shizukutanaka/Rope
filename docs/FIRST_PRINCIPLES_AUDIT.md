@@ -47,14 +47,14 @@
 
 | 公理 | 必要能力 | 実装 | 到達 | 実体 (file:line) |
 |---|---|:--:|:--:|---|
-| **A1** | ピア発見 (mDNS/BT/DHT) | △ | ✗ | `pair.rs:615` `record_discovery` は状態機械のみ。`mdns_enabled`/`mdns_service` (`pair.rs:229,231`) は設定値だけで、ソケットを開くコードが存在しない |
-| **A2** | 信頼確立 (未知ピアの検証) | △ | ✗ | `trust_store` (`pair.rs:45`) は TOFU のみ。`CapabilityChallenge` (`pair.rs:394`) + `issue_pow_challenge` (`pair.rs:1028`) / `verify_capability_proof` (`pair.rs:1061`) は実装・テスト済みだが CLI 未結線 |
+| **A1** | ピア発見 (mDNS/BT/DHT) | △ | ✗ | `pair.rs:628` `record_discovery` は状態機械のみ。`mdns_enabled`/`mdns_service` (`pair.rs:229,231`) は設定値だけで、ソケットを開くコードが存在しない |
+| **A2** | 信頼確立 (未知ピアの検証) | △ | ✗ | `trust_store` (`pair.rs:45`) は TOFU のみ。`CapabilityChallenge` (`pair.rs:407`) + `issue_pow_challenge` (`pair.rs:1093`) / `verify_capability_proof` (`pair.rs:1126`) は実装・テスト済みだが CLI 未結線 |
 | **A3** | **推論の実行** | **×** | ✗ | **推論エンジンへのバインディングが一行も存在しない**。`llama` の grep ヒットは全てモデル名の文字列 (`first_run.rs:186` の設定値、`intent.rs:1182,1288` のテストデータ) のみ |
-| **A4** | 実行の正しさの検証 | △ | ✗ | `VerificationLevel` (`intent.rs:364`) は enum のみ。`proof_satisfies` (`ecash.rs:778`) はコミットメントのハッシュ一致を見るだけで、計算が実際に行われた証明にはならない |
+| **A4** | 実行の正しさの検証 | △ | ✗ | `VerificationLevel` (`intent.rs:316`) は enum のみ。`proof_satisfies` (`ecash.rs:859`) はコミットメントのハッシュ一致を見るだけで、計算が実際に行われた証明にはならない |
 | **A5** | 対価の移転 | △ | ✗ | `mint_tokens`/`spend_proofs`/`open_escrow`/`open_stream` (`ecash.rs:490,523,642,935`) は全て実装・テスト済みだが、**どの動詞からも呼ばれない** (`load_ecash` の読込だけが到達)。加えて BDHKE 署名自体がプレースホルダ |
-| **A6** | 秘匿の技術的保証 | △ | ✗ | `perform_attestation` (`confidential.rs:460`) は動くが、`build_evidence_signature` (`confidential.rs:701`) が `unverified-digest:` prefix 付きの偽署名。Noise (`pair.rs:198` `NoisePattern`, `pair.rs:770` `begin_handshake`) は鍵交換なしの状態機械 |
-| **A7** | 中断耐性 (自動返金) | △ | ✗ | `deadman_at` (`ecash.rs:234`) + `refund_escrow` (`ecash.rs:824`) + `process_deadman` は実装済みだが未到達。さらに返金経路には既知の不整合あり (§1.8) |
-| **A9** | 貸し手の保護 (隔離・緊急停止・悪用防止) | △ | ✗ | `panic_stop` (`session.rs:360-380`) は `docker kill` による緊急停止機構として**存在するが CLI 未到達**。サンドボックス隔離 (gVisor/Firecracker) / URI フェッチの SSRF 対策 / CSAM モデレーションは**一切未実装** — A9 は「緊急停止の型」だけがある状態 (§4h) |
+| **A6** | 秘匿の技術的保証 | △ | ✗ | `perform_attestation` (`confidential.rs:460`) は動くが、`build_evidence_signature` (`confidential.rs:701`) が `unverified-digest:` prefix 付きの偽署名。Noise (`pair.rs:198` `NoisePattern`, `pair.rs:783` `begin_handshake`) は鍵交換なしの状態機械 |
+| **A7** | 中断耐性 (自動返金) | △ | ✗ | `deadman_at` (`ecash.rs:905`) + `refund_escrow` (`ecash.rs:905`) + `process_deadman` は実装済みだが未到達。さらに返金経路には既知の不整合あり (§1.8) |
+| **A9** | 貸し手の保護 (隔離・緊急停止・悪用防止) | △ | ✗ | `panic_stop` (`session.rs:399-419`) は `docker kill` による緊急停止機構として**存在するが CLI 未到達**。サンドボックス隔離 (gVisor/Firecracker) / URI フェッチの SSRF 対策 / CSAM モデレーションは**一切未実装** — A9 は「緊急停止の型」だけがある状態 (§4h) |
 | **A8** | ゼロコンフィグ | **○** | **✓** | `should_show_first_run` (`first_run.rs:729`) → `step_identity` (`first_run.rs:312`) で鍵生成まで自動。`rope` 一発で完走する |
 
 ### 演繹された結論
@@ -86,7 +86,7 @@
 | `pair::CapabilityChallenge` 一式 (~300行) | **A2 に直接対応** | **保持が演繹的に正当化される**。帰納的監査は「ロードマップに記載があるから保持」と判断したが、より強い根拠がある — A2 (未知の他人との信頼確立) は製品成立の必要条件であり、TOFU だけでは A2 を満たせない。これは「予約 API」ではなく**必須能力の先行実装** |
 | `ecash` の escrow/streaming 一式 | **A5 + A7 に直接対応** | 同上。未到達だが**製品成立に不可欠**。削除候補として検討する余地はない |
 | `confidential` の attestation 一式 | **A6 に直接対応** | 同上 (ただし署名が偽である点は A6 を満たさない — 型ではなく中身の問題) |
-| `session.rs` の `SessionManager`/`panic_stop` クラスター (10関数) | **A9 に直接対応** ⚠️**2026-08-08 訂正** | ~~当初「A1-A8 のどれにも対応しない、ローカルプロセス管理という別レイヤーの関心事」と評価し削除材料としたが、**これは公理集合に A9 が欠けていたための誤判定**~~。`panic_stop` (`session.rs:360-380`) は停止フラグを立て **`docker ps --filter name=rope-` で Rope のコンテナを列挙し `docker kill` する** — **貸し手が借り手のワークロードを緊急停止する機構**そのもの。A9 (貸し手の保護) に直接対応するため **削除候補から外す**。根拠: [`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §4h |
+| `session.rs` の `SessionManager`/`panic_stop` クラスター (10関数) | **A9 に直接対応** ⚠️**2026-08-08 訂正** | ~~当初「A1-A8 のどれにも対応しない、ローカルプロセス管理という別レイヤーの関心事」と評価し削除材料としたが、**これは公理集合に A9 が欠けていたための誤判定**~~。`panic_stop` (`session.rs:399-419`) は停止フラグを立て **`docker ps --filter name=rope-` で Rope のコンテナを列挙し `docker kill` する** — **貸し手が借り手のワークロードを緊急停止する機構**そのもの。A9 (貸し手の保護) に直接対応するため **削除候補から外す**。根拠: [`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §4h |
 | `format_*` 6個・QR/TOFU 統計 7個 | **どれにも対応しない** | **観測可能性 (運用) の要求**であって製品成立の必要条件ではない、と位置づけが明確になる。→ **2026-08-18 決着**: 5 つ目の動詞は作らず、既存動詞への結線 3・削除 2・延期 1 で処理 (`SURPLUS_AND_GAPS.md` §1.7)。QR/TOFU 統計 7 個は未表示のまま据え置き |
 
 ---
@@ -184,10 +184,10 @@ A9 (貸し手の保護) ── A3 (実行) と同時に成立が必要 (実行�
 >
 > 貸し手が A9 を行使して緊急停止したとき、借り手に非は無いのだから
 > 資金は即座に返るべき — しかし**コード上、緊急停止と返金は接続していない**。
-> `panic_stop` (`session.rs:360-390`) はコンテナを kill し
+> `panic_stop` (`session.rs:399-429`) はコンテナを kill し
 > `clear_session_files()` (`session.rs:385`) を呼ぶが、これが消すのは
 > `session_dir()` 配下の `.json` のみで **ecash.json は対象外**。
-> escrow の自動返金は `process_deadman` (`ecash.rs:900-918`) の
+> escrow の自動返金は `process_deadman` (`ecash.rs:1015-1033`) の
 > `deadman_at < now` 頼みで、既定は **60 分** (`ecash.rs:341,366,677`)。
 > → **貸し手が停止しても借り手の資金は最大 60 分ロックされ、
 > A7 は A9 の経路では成立していない。**
@@ -306,8 +306,8 @@ README の 6 つの約束のうち、他の 5 つ (他人GPU・TEE プライバ�
 |---|---|---|
 | `step_identity` (`first_run.rs:312`) | — (A8 固有) | **本物**。鍵生成・設定作成を質問ゼロで実行 |
 | `step_discovery_start` (`first_run.rs:326`) | A1 | stage 遷移のみ。探索 I/O なし |
-| `step_discovery_complete` (`first_run.rs:342`) | A1 | `pair.paired` を読んで VRAM 最大のピアを選ぶ (`first_run.rs:347-354`)。**発見ではなく既存状態の参照**。空ならローカルへフォールバック |
-| `step_attest` (`first_run.rs:405`) | A6 | ピア有無で TEE 種別を決める。コード自身が「**暫定: ピア有無で TEE 種別を決定 (実運用は Bob 側 GPU 種別を取得)**」と明記 (`first_run.rs:410-411`) |
+| `step_discovery_complete` (`first_run.rs:342`) | A1 | `pair.paired` を読んで VRAM 最大のピアを選ぶ (`first_run.rs:405-412`)。**発見ではなく既存状態の参照**。空ならローカルへフォールバック |
+| `step_attest` (`first_run.rs:405`) | A6 | ピア有無で TEE 種別を決める。コード自身が「**暫定: ピア有無で TEE 種別を決定 (実運用は Bob 側 GPU 種別を取得)**」と明記 (`first_run.rs:491-492`) |
 | `step_build_intent` (`first_run.rs:491`) | — | `Intent` を組み立てる。**本物** (型としては完全) |
 | `step_demo_completed` (`first_run.rs:523`) | **A3** | 引数で渡された文字列を保存するだけ (`first_run.rs:529`)。**推論は行わない** — 呼び出し元 (`main.rs`) が `sample_haiku_response()` の固定文を渡す |
 | `step_finale` (`first_run.rs:536`) | — | 完了画面の組み立て |
@@ -354,7 +354,7 @@ A3 の最小定義: **借り手のプロンプトが実際にモデルで処理�
 |---|---|---|
 | 推論エンジンへのバインディング | **不在** | **`mistral.rs` を推奨** — 2026-08 調査で Rope の設計制約と突き合わせ確定 (pure Rust / Candle 0.9.2 / CPU 単独で動作 = §8 の「初回は CPU で十分」が実際に成立)。`llama-cpp-2` は C++ FFI + API 不安定 (作者が semver 非準拠を明言) で依存最小主義と衝突。根拠: [`RESEARCH_UPDATE_2026-08.md`](RESEARCH_UPDATE_2026-08.md) §2 |
 | モデル重みの取得手段 | 不在 | **ローカルパス指定で最小充足**。CID/P2P 配布 (`RESEARCH_IMPROVEMENTS.md` #11) は A3 の必要条件ではなく最適化 — A3 成立後の課題 |
-| `ExecutionPlan` → 実行の配線点 | 不在 | `resolve` (`intent.rs:603`) が `ExecutionPlan` (`intent.rs:396-408`) を返して終わっている。`steps`/`selected_model_variant` は揃っているが、**それを受け取って実行する主体がいない** |
+| `ExecutionPlan` → 実行の配線点 | 不在 | `resolve` (`intent.rs:544`) が `ExecutionPlan` (`intent.rs:348-360`) を返して終わっている。`steps`/`selected_model_variant` は揃っているが、**それを受け取って実行する主体がいない** |
 
 ### A3 に必要と誤認されやすいが、演繹上は不要なもの
 

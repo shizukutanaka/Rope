@@ -136,7 +136,7 @@ API を確認すること。
 > - DLEQ proof (`e`, `s`, ユーザー間転送時は `r`) により、**受信者は mint に
 >   問い合わせず**に `R1 = s*G - e*A` / `R2 = s*B' - e*C'` /
 >   `e == hash(R1,R2,A,C')` を検証でき、mint が発行を否認できなくなる。
-> - **A7 (中断耐性) の前提**: `tick_stream` (`ecash.rs:982`) の 1 秒課金で
+> - **A7 (中断耐性) の前提**: `tick_stream` (`ecash.rs:1097`) の 1 秒課金で
 >   毎 tick mint に往復すると 60 秒ジョブで最大 60 往復。DLEQ があれば
 >   受領時オフライン検証で往復を省ける (`CATEGORY_RESEARCH.md` §E2 が
 >   既に指摘していたが、本 readiness の優先度に未反映だった)。
@@ -203,7 +203,7 @@ API を確認すること。
 - [ ] `SECURITY.md` の「まだ暗号学的に機能していないもの」表からBDHKE行を削除
 - [ ] `docs/SURPLUS_AND_GAPS.md` §1.1 の該当箇所を「[DONE]」に更新
 - [ ] **返金経路の proof 復元** (`docs/SURPLUS_AND_GAPS.md` §1.8): `close_stream`
-      (`ecash.rs:1030`) / `refund_escrow` (`ecash.rs:837`, `簡略化` コメント) /
+      (`ecash.rs:1030`) / `refund_escrow` (`ecash.rs:905`, `簡略化` コメント) /
       `resolve_dispute` PayerWins・Split (`ecash.rs:883,890`) は現状
       `wallet.total_sats += 返金額` のみで proof バケットを復元しない。
       実 mint 結線後は返金を **実 mint swap による proof 再発行** に置換し、

@@ -141,17 +141,17 @@ CI remains the shipping gate.
 > rather than made silently.
 
 **Original finding, kept for context:**
-- `src/core/ecash.rs:441-470` `build_proof` — Cashu BDHKE unblinding is
+- `src/core/ecash.rs:455-484` `build_proof` — Cashu BDHKE unblinding is
   `blake3::hash("C|keyset|amount|secret")` reshaped into secp256k1-point-shaped
   bytes. Not real elliptic-curve math. Same in `src/net/cashu_mint.rs:520-556`
   `build_blinded_outputs`.
 - `src/net/cashu_mint.rs:360-368` — NUT-07 proof-state check unimplemented by
   design (would need a `secp256k1` dep, deliberately not added).
-- `src/core/confidential.rs:671-689` `build_evidence_signature` — TEE
+- `src/core/confidential.rs:701-719` `build_evidence_signature` — TEE
   attestation "signature" is `format!("unverified-digest:{}", blake3_hash)`.
   Honestly prefixed (tested to stay prefixed, `confidential.rs` test near
   line 1270-1293), but not a real NVIDIA NRAS/RIM/OCSP-verified signature.
-- `src/core/pair.rs:167-207` — Noise XX/IK is a `HandshakeState` enum with no
+- `src/core/pair.rs:223-263` — Noise XX/IK is a `HandshakeState` enum with no
   actual key exchange. `x25519-dalek`/`aes-gcm` are not dependencies (removed,
   `Cargo.toml:32` comment: "v0.3の Noise protocol 実装時に復活予定").
 - Root cause for all four: `secp256k1`/`x25519-dalek`/`aes-gcm`/`snow` cannot
@@ -312,6 +312,40 @@ implemented; **the path that actually runs consulted none of it**:
 identity. A first-contact peer is accepted by definition — that is what TOFU
 means. **The 6-digit verify code remains the only defence against an attacker
 who is present from the very first connection** (`SECURITY.md`).
+
+### 1.18 規範3 の土台が腐っていた — file:line アンカーの 6 割が誤った場所を指していた `[FIXED 2026-08-18, now gated]`
+
+`CLAUDE.md` 規範3 は「発見は file:line アンカーで記録する。**将来の実装者が必ず
+参照する**」と定めている。その前提を誰も検証していなかった。
+
+**実測: 検証可能な 84 件のうち 48 件 (57%) が誤った行を指していた。**
+本セッションだけで `src/` に 5,800 行以上入れたので当然の結果であり、
+一度きりの事故ではなく**編集のたびに必ず起きる**。
+
+参照される前提で書かれた記録が 6 割間違っている状態は、**記録が無いより悪い** —
+読んだ人を誤った場所へ連れて行き、しかも自信を持ってそうさせるからである。
+
+**`tools/check-doc-anchors.sh`** — 文書中の `` `file.rs:123` `` を拾い、近傍の
+バッククォート付き識別子がその行の ±12 行に実在するかを検証する。
+`--fix` で行番号を書き換える。**`.githooks/pre-push` の 6/7 として
+push をブロックする** (助言ではない — 決定的でネットワークも要らないため)。
+
+**このツール自身が 2 度、誤った書き換えをしかけた。** どちらも直した:
+
+1. **全置換バグ**: 同じアンカー文字列が別のシンボルを指して複数箇所に現れる
+   (`first_run.rs:729` が `should_show_first_run` と `step_identity` の両方で
+   使われていた)。`str.replace` で全置換したため**正しい方を壊し**、
+   検査が振動した。位置指定 (行 + 文字オフセット、後ろから適用) に変更。
+2. **方向バイアスのバグ**: 記法は `` `file.rs:1` `sym` `` と
+   `` `sym` (`file.rs:1`) `` の 2 通りある。「直後を優先」にしたところ、
+   後者の記法で**隣の項目のシンボル**を掴み、`issue_pow_challenge` に
+   `CapabilityChallenge` の行番号を書き込んだ。方向を問わず**隣接 (30 字以内)**
+   のものだけを採り、離れていれば「検証できない」に倒すよう変更。
+
+**2 の教訓を設計原則にした**: このツールは**誤って書き換えるより、検証できない
+と言う方を選ぶ**。未検証は正直だが、誤った書き換えは嘘になる。
+その結果 38 件は「シンボルを伴わないアンカー」として**検証していない** —
+黙って通したのではなく、毎回件数を表示する。
 
 ### 1.13 Two resource bugs in the inference path, found by re-reading what shipped `[FIXED 2026-08-18]`
 
@@ -686,14 +720,14 @@ proof of the remainder.
 - The wallet has two representations of balance that are supposed to agree:
   `wallet.total_sats` (a scalar) and `Σ` of proof amounts across
   `wallet.proofs_by_mint` (the actual bearer tokens). The **credit** paths
-  keep them in sync — `mint_tokens` (`ecash.rs:508-515`) and `receive_proofs`
+  keep them in sync — `mint_tokens` (`ecash.rs:490-497`) and `receive_proofs`
   (`ecash.rs:613-618`) both push proofs into a bucket AND add the same amount
   to `total_sats`. `lock_funds` (`ecash.rs:715-753`) also keeps them in sync:
   it removes `amount_sats` worth of proofs from the bucket (re-issuing
   power-of-two change) AND subtracts `amount_sats` from `total_sats`.
 - But the **refund** paths only touch the scalar:
-  - `close_stream` (`ecash.rs:1030`): `self.wallet.total_sats += refund;`
-  - `refund_escrow` (`ecash.rs:837`): `self.wallet.total_sats += e.amount_sats;`
+  - `close_stream` (`ecash.rs:1132`): `self.wallet.total_sats += refund;`
+  - `refund_escrow` (`ecash.rs:905`): `self.wallet.total_sats += e.amount_sats;`
     (comment literally says `簡略化` = "simplified")
   - `resolve_dispute` PayerWins/Split (`ecash.rs:883,890`):
     `total_sats += amount` / `amount / 2`
@@ -807,10 +841,10 @@ proof of the remainder.
   emergency stop (A9). The borrower is not at fault, so the escrow should be
   refunded immediately. It is not.
 - Three facts, each grep-verified:
-  - `panic_stop` (`session.rs:360-390`) does exactly three things: sets
+  - `panic_stop` (`session.rs:399-429`) does exactly three things: sets
     `STOP_REQUESTED`, `docker kill`s Rope's containers, and calls
-    `clear_session_files()` (`session.rs:385`).
-  - `clear_session_files` (`session.rs:483-494`) deletes only `.json` files
+    `clear_session_files()` (`session.rs:563`).
+  - `clear_session_files` (`session.rs:563-574`) deletes only `.json` files
     under `config::session_dir()`. **The ecash state lives in
     `~/.rope/ecash.json` and is untouched.**
   - The only automatic refund path is `process_deadman`
@@ -844,7 +878,7 @@ proof of the remainder.
   §1.8, and CLAUDE.md's "no blocker" tag on this item was wrong.**
   Two grep-verified facts change the shape of the fix:
   1. **The anti-clawback filter is already inside `refund_escrow`.**
-     `refund_escrow` (`ecash.rs:824-843`) opens with
+     `refund_escrow` (`ecash.rs:905-924`) opens with
      `if !matches!(e.state, EscrowState::Deposited | EscrowState::InProgress)
      { bail }` — the exact `Released`-excluding guard this entry asked for.
      So `panic_stop` does **not** need to reimplement the filter: calling
@@ -908,7 +942,7 @@ proof of the remainder.
   not preferences; they are what A9 (lender protection) requires once the
   lender actually loads borrower-named models and fetches borrower-named URIs.
 - **Correction to earlier entries**: §4h/§4j said "Train/RAG fetch a
-  borrower-supplied URI". Re-checking `Workload` (`intent.rs:124-144`):
+  borrower-supplied URI". Re-checking `Workload` (`intent.rs:137-157`):
   `Retrieve` takes `corpus_id` — an **identifier for a corpus the lender
   already has**, not a URI. **Only `Train.dataset_uri` is a fetched URI.**
   `Retrieve` is the safer design, not an exposure.
@@ -1026,7 +1060,7 @@ proof of the remainder.
 - Read individually this session (`docs/REACHABILITY_AUDIT.md`): `panic_stop`
   (`session.rs:343-365`) is a carefully engineered emergency-stop path with
   an explicit historical bug-fix doc comment (old version gave up entirely
-  on `docker ps` failure). `SessionManager` (`session.rs:276-331`) has a
+  on `docker ps` failure). `SessionManager` (`session.rs:296-351`) has a
   design comment about a possible v0.3 async migration
   (`tokio::sync::RwLock`).
 - **Decision explicitly deferred**: this looks like either (a) safety-

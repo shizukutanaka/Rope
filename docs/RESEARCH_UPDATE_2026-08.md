@@ -32,7 +32,7 @@ Zero-Knowledge Verification of LLM Inference" (**IEEE S&P'26 採択**)。
 
 ### Rope への含意 (これが本質)
 
-Rope の `proof_satisfies` (`ecash.rs:778`) は**コミットメントのハッシュ一致**を
+Rope の `proof_satisfies` (`ecash.rs:859`) は**コミットメントのハッシュ一致**を
 見るだけであり、Hollow-LLM が破る ZK 証明よりも**さらに弱い**。
 第一原理監査 §2 の A4 判定 (「計算が実際に行われた証明にはならない」) を、
 査読付き攻撃論文が独立に裏付けた形になる。
@@ -634,7 +634,7 @@ A9 は貸し手の *参加条件* を与える。**自分のマシンが壊さ�
 **「A1-A8 のどれにも対応しない → ローカルプロセス管理という別レイヤーの関心事」**
 と評価し、削除判断の材料が一つ増えたとした。**これは誤りだった。**
 
-`panic_stop` (`session.rs:360-380`) の実装を読むと:
+`panic_stop` (`session.rs:399-419`) の実装を読むと:
 - グローバル停止フラグを最優先で立て (`STOP_REQUESTED`)、
 - **`docker ps -q --filter name=rope-` で Rope のコンテナを列挙し、
   `docker kill` で停止する** (best-effort、docker 不在でも全体を諦めない)
@@ -724,13 +724,13 @@ A9 は貸し手の *参加条件* を与える。**自分のマシンが壊さ�
 
 **コードで確認した実態** (この 3 点はいずれも grep で確認済み):
 
-1. `panic_stop` (`session.rs:360-390`) がするのは 3 つだけ —
+1. `panic_stop` (`session.rs:399-429`) がするのは 3 つだけ —
    `STOP_REQUESTED` を立てる / `docker kill` でコンテナを止める /
-   **`clear_session_files()` でセッションファイルを消す** (`session.rs:385`)。
-2. `clear_session_files` (`session.rs:483-494`) が消すのは
+   **`clear_session_files()` でセッションファイルを消す** (`session.rs:563`)。
+2. `clear_session_files` (`session.rs:563-574`) が消すのは
    **`config::session_dir()` 配下の `.json` のみ**。
    **ecash の状態は `~/.rope/ecash.json` にあり、対象外**。
-3. escrow が返金される唯一の自動経路は `process_deadman` (`ecash.rs:900-918`) で、
+3. escrow が返金される唯一の自動経路は `process_deadman` (`ecash.rs:1015-1033`) で、
    条件は **`e.deadman_at < now`**。その `deadman_at` は開設時に
    `default_deadman_minutes` (**デフォルト 60 分**, `ecash.rs:341,366,677`) 後に設定される。
 
@@ -941,7 +941,7 @@ no-token の少額決済は誰も出荷していない。
 
 ### ⚠️ 自己訂正: URI を持つのは `Train` だけ、`Retrieve` は識別子
 
-`Workload` (`intent.rs:124-144`) を再確認した実際の形:
+`Workload` (`intent.rs:137-157`) を再確認した実際の形:
 
 | variant | 借り手が渡すもの | URI フェッチ |
 |---|---|---|

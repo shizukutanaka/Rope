@@ -46,7 +46,7 @@
 
 **3 箇所すべて grep 確認済み。**
 
-### (a) `main.rs:387-390` — `run_inference` が計画を表示して終わる
+### (a) `main.rs:478-481` — `run_inference` が計画を表示して終わる
 
 ```rust
 capability_boundary!(
@@ -72,7 +72,7 @@ orch.step_demo_completed(&sampled)?;
 
 ### (c) `intent.rs:574` — `resolve()` が返す計画を誰も実行しない
 
-`ExecutionPlan` (`intent.rs:372-384`) は `steps` / `selected_model_variant` /
+`ExecutionPlan` (`intent.rs:348-360`) は `steps` / `selected_model_variant` /
 `selected_provider` を持つが、**それを受け取って実行する主体が存在しない**。
 
 ---
@@ -185,7 +185,7 @@ orch.step_demo_completed(&sampled)?;
 ### Step 4: A9 の隔離を同スコープで入れる
 
 - Step 1 の推論呼び出しを、隔離下で実行するよう包む。
-- **`panic_stop` (`session.rs:360-390`) の docker 前提を、選んだ隔離技術に合わせる**
+- **`panic_stop` (`session.rs:399-429`) の docker 前提を、選んだ隔離技術に合わせる**
   (`SURPLUS_AND_GAPS.md` §2.4)。
 - **同時に `A9→A7` の欠落 (§1.10) を直す** — 緊急停止時に**未完了の** escrow を返金
   (`Deposited | InProgress` のみ。完了済みを返金すると貸し手の攻撃面になる)。

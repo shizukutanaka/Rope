@@ -72,7 +72,7 @@ Iroh 1.0 を対抗馬として発見した。**この選択が全ての後続作
 
 - `pair.rs:198-218` の `NoisePattern`/`HandshakeState` は既に完全な
   状態遷移を定義済み — 追加すべきは各遷移における**実際の鍵交換演算**のみ。
-- `begin_handshake`(`pair.rs:770`)/`advance_handshake`(`pair.rs:819`)/
+- `begin_handshake`(`pair.rs:783`)/`advance_handshake`(`pair.rs:832`)/
   `complete_handshake`(`pair.rs:854`) の中身を、選定したクレート
   (`snow` または Iroh 内蔵) の Noise XX ハンドシェイクAPIに接続する。
   関数シグネチャ自体は変更不要 — 内部実装のみ差し替え。

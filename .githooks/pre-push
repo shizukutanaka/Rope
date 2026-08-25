@@ -46,35 +46,35 @@ fail() {
     exit 1
 }
 
-echo "── 1/6 rustfmt ──"
+echo "── 1/7 rustfmt ──"
 mapfile -t rs_files < <(git ls-files 'src/*.rs' 'src/**/*.rs' 'examples/*.rs' 2>/dev/null)
 if [ "${#rs_files[@]}" -gt 0 ]; then
     rustfmt --edition 2021 --check "${rs_files[@]}" || fail "rustfmt"
 fi
 echo "  OK"
 
-echo "── 2/6 オフライン型検査 ──"
+echo "── 2/7 オフライン型検査 ──"
 ./tools/offline-typecheck/check.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/check.sh
     fail "型検査"
 }
 echo "  OK"
 
-echo "── 3/6 テストを実行 (src/ 全体) ──"
+echo "── 3/7 テストを実行 (src/ 全体) ──"
 ./tools/offline-typecheck/run-tests.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/run-tests.sh
     fail "テスト"
 }
 echo "  OK"
 
-echo "── 4/6 clippy + MSRV $MSRV ──"
+echo "── 4/7 clippy + MSRV $MSRV ──"
 ./tools/offline-typecheck/lint.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/lint.sh
     fail "clippy"
 }
 echo "  OK"
 
-echo "── 5/6 依存グラフの MSRV (助言) ──"
+echo "── 5/7 依存グラフの MSRV (助言) ──"
 # **push をブロックしない。** 理由は 2 つ:
 #   1. index.crates.io への到達性に依存するので、ネットワーク事情で
 #      push が止まるのは筋が悪い
@@ -91,7 +91,21 @@ else
 fi
 rm -f /tmp/rope-deps-msrv.$$
 
-echo "── 6/6 cargo (使えれば) ──"
+echo "── 6/7 文書の file:line アンカー ──"
+# 規範3 は「発見は file:line で記録する。将来の実装者が必ず参照する」と言うが、
+# **コードを直すたび行番号はずれる**。実測 (2026-08-18) で 84 件中 48 件が
+# 誤った場所を指していた。参照される前提の記録が 6 割間違っている状態は、
+# 記録が無いより悪い — 読んだ人を誤った場所へ連れて行くからである。
+# ここで止めるのは「正直さ」を人間の注意力ではなく機械で守らせるため (規範6)。
+./tools/check-doc-anchors.sh >/dev/null 2>&1 || {
+    ./tools/check-doc-anchors.sh
+    echo
+    echo "   → 直すには: tools/check-doc-anchors.sh --fix"
+    fail "文書アンカー"
+}
+echo "  OK"
+
+echo "── 7/7 cargo (使えれば) ──"
 if cargo check --all-targets --offline >/dev/null 2>&1; then
     echo "  cargo が使えます。本物のゲートを回します。"
     cargo test --all-targets || fail "cargo test"

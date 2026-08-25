@@ -13,6 +13,7 @@ tools/offline-typecheck/run-tests.sh      # テスト 358 件を**実際に実�
 tools/offline-typecheck/lint.sh           # clippy + MSRV (registry 不要)
 tools/offline-typecheck/check-deps-msrv.sh # 依存の MSRV (index のみ使用)
 tools/offline-typecheck/selftest.sh       # ハーネス自体の健全性検証
+tools/check-doc-anchors.sh                # 文書の file:line アンカー検証
 ```
 
 **`clippy-driver` は toolchain 同梱で registry を必要としない。**
