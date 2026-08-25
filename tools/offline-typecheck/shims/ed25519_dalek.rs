@@ -2,6 +2,9 @@
 //!
 //! ⚠️ **署名も検証もしない** (`verify` は常に Ok)。暗号的性質の検証には使えない。
 
+#[path = "_entropy.rs"]
+mod entropy;
+
 #[derive(Debug)]
 pub struct SignatureError;
 
@@ -45,10 +48,10 @@ impl VerifyingKey {
     /// 本物は展性のある署名を拒否する厳格版。ここは型のみ。
     pub fn verify_strict(
         &self,
-        _message: &[u8],
-        _signature: &Signature,
+        message: &[u8],
+        signature: &Signature,
     ) -> Result<(), SignatureError> {
-        Ok(())
+        <VerifyingKey as Verifier<Signature>>::verify(self, message, signature)
     }
 }
 
@@ -56,8 +59,13 @@ impl VerifyingKey {
 pub struct SigningKey([u8; 32]);
 
 impl SigningKey {
+    /// **毎回異なる鍵を返す。** 固定値だと「別の鍵は別の指紋を持つ」
+    /// といったテストが偽陽性になる。
+    /// 🔴 暗号強度は無い (`_entropy` は xorshift)。
     pub fn generate<R>(_rng: &mut R) -> SigningKey {
-        SigningKey([0u8; 32])
+        let mut k = [0u8; 32];
+        entropy::fill(&mut k);
+        SigningKey(k)
     }
     pub fn from_bytes(bytes: &[u8; 32]) -> SigningKey {
         SigningKey(*bytes)
@@ -85,13 +93,36 @@ pub trait Verifier<S> {
 }
 
 impl Signer<Signature> for SigningKey {
-    fn sign(&self, _message: &[u8]) -> Signature {
-        Signature([0u8; 64])
+    /// 鍵とメッセージから決定論的に導出する。**本物の Ed25519 ではない**が、
+    /// 「違うメッセージ/鍵なら違う署名」というロジックのテストは通る。
+    fn sign(&self, message: &[u8]) -> Signature {
+        let mut sig = [0u8; 64];
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in self.0.iter().chain(message.iter()) {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        let mut x = h | 1;
+        for chunk in sig.chunks_mut(8) {
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            chunk.copy_from_slice(&x.wrapping_mul(0x2545_F491_4F6C_DD1D).to_le_bytes());
+        }
+        Signature(sig)
     }
 }
 
 impl Verifier<Signature> for VerifyingKey {
-    fn verify(&self, _message: &[u8], _signature: &Signature) -> Result<(), SignatureError> {
-        Ok(())
+    /// 対応する `SigningKey` が作る署名と一致するかを見る。
+    /// **常に Ok を返すと改竄検出のテストが全て偽陽性になる**ため。
+    /// 🔴 本物の Ed25519 検証ではない。
+    fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), SignatureError> {
+        let expected = SigningKey(self.0).sign(message);
+        if expected.0 == signature.0 {
+            Ok(())
+        } else {
+            Err(SignatureError)
+        }
     }
 }

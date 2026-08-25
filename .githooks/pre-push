@@ -20,7 +20,7 @@
 #
 # 1. rustfmt (構文と整形)
 # 2. オフライン型検査 — `src/` 全体を rustc に通す
-# 3. 依存ゼロモジュールのテストを**実際に実行**
+# 3. `src/` のテスト 358 件を**実際に実行** (core/ も含む)
 # 4. `cargo` が使えるなら本物のゲート (build/test/clippy/fmt)
 #
 # 1-3 は crates.io 不要。4 は使える環境でだけ走る。
@@ -51,7 +51,7 @@ echo "── 2/4 オフライン型検査 ──"
 }
 echo "  OK"
 
-echo "── 3/4 依存ゼロモジュールのテスト ──"
+echo "── 3/4 テストを実行 (src/ 全体) ──"
 ./tools/offline-typecheck/run-tests.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/run-tests.sh
     fail "テスト"
@@ -67,7 +67,8 @@ if cargo check --all-targets --offline >/dev/null 2>&1; then
     echo "  OK"
 else
     echo "  スキップ (crates.io に到達できません — docs/SURPLUS_AND_GAPS.md §0)"
-    echo "  ⚠️  clippy・MSRV 1.75・--features http・core/ のテストは未確認のままです。"
+    echo "  ⚠️  テストは通りましたが**スタブ経由**です。clippy・MSRV 1.75・"
+    echo "      --features http・実 crate との挙動差・暗号的性質は未確認のまま。"
 fi
 
 echo

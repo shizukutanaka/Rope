@@ -13,9 +13,15 @@ pub struct DateTime<Tz> {
 }
 
 impl Utc {
+    /// **実時刻を返す。** 固定値だと deadman / 経過時間 / TTL のテストが
+    /// 全て偽陽性になる。分解能はナノ秒。
     pub fn now() -> DateTime<Utc> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0);
         DateTime {
-            secs: 0,
+            secs: nanos,
             tz: std::marker::PhantomData,
         }
     }
@@ -23,16 +29,16 @@ impl Utc {
 
 impl<Tz> DateTime<Tz> {
     pub fn timestamp(&self) -> i64 {
-        self.secs
+        self.secs / 1_000_000_000
     }
     pub fn timestamp_millis(&self) -> i64 {
-        self.secs * 1000
+        self.secs / 1_000_000
     }
     pub fn timestamp_nanos_opt(&self) -> Option<i64> {
         Some(self.secs)
     }
     pub fn timestamp_micros(&self) -> i64 {
-        self.secs
+        self.secs / 1_000
     }
     pub fn timestamp_subsec_nanos(&self) -> u32 {
         0
@@ -104,41 +110,62 @@ pub struct Duration {
     secs: i64,
 }
 
+/// ⚠️ `secs` フィールドは**ナノ秒**を保持する (名前は歴史的経緯)。
+/// `DateTime` と単位を揃えないと加減算が壊れる — 実際に一度壊した。
 impl Duration {
     pub fn seconds(n: i64) -> Duration {
-        Duration { secs: n }
-    }
-    pub fn minutes(n: i64) -> Duration {
-        Duration { secs: n * 60 }
-    }
-    pub fn hours(n: i64) -> Duration {
-        Duration { secs: n * 3600 }
-    }
-    pub fn days(n: i64) -> Duration {
         Duration {
-            secs: n * 86_400,
+            secs: n.saturating_mul(1_000_000_000),
         }
     }
+    pub fn minutes(n: i64) -> Duration {
+        Duration::seconds(n.saturating_mul(60))
+    }
+    pub fn hours(n: i64) -> Duration {
+        Duration::seconds(n.saturating_mul(3_600))
+    }
+    pub fn days(n: i64) -> Duration {
+        Duration::seconds(n.saturating_mul(86_400))
+    }
     pub fn milliseconds(n: i64) -> Duration {
-        Duration { secs: n / 1000 }
+        Duration {
+            secs: n.saturating_mul(1_000_000),
+        }
     }
     pub fn num_seconds(&self) -> i64 {
-        self.secs
+        self.secs / 1_000_000_000
     }
     pub fn num_minutes(&self) -> i64 {
-        self.secs / 60
+        self.secs / 60_000_000_000
     }
     pub fn num_hours(&self) -> i64 {
-        self.secs / 3600
+        self.secs / 3_600_000_000_000
     }
     pub fn num_days(&self) -> i64 {
-        self.secs / 86_400
+        self.secs / 86_400_000_000_000
     }
     pub fn num_milliseconds(&self) -> i64 {
-        self.secs * 1000
+        self.secs / 1_000_000
     }
 }
 
-// serde 境界を満たすためだけの impl (実 chrono も serde feature で提供する)。
-impl<Tz> serde::Serialize for DateTime<Tz> {}
-impl<'de, Tz> serde::Deserialize<'de> for DateTime<Tz> {}
+// 🔴 **実 chrono は RFC3339 文字列で書く。ここはエポックからのナノ秒 (数値)。**
+// このスタブを通した round-trip は通るが、実 serde_json が書いたファイルとは
+// 互換ではない (`serde.rs` の注意を参照)。
+impl<Tz> serde::Serialize for DateTime<Tz> {
+    fn to_json(&self) -> serde::Json {
+        serde::Json::Num(self.secs as f64)
+    }
+}
+impl<'de, Tz> serde::Deserialize<'de> for DateTime<Tz> {
+    fn from_json(v: &serde::Json) -> Result<Self, String> {
+        match v {
+            serde::Json::Num(n) => Ok(DateTime {
+                secs: *n as i64,
+                tz: std::marker::PhantomData,
+            }),
+            // 実 chrono 形式 (RFC3339 文字列) は解釈しない — 読めたふりをしない
+            other => Err(format!("ナノ秒の数値を期待: {:?}", other)),
+        }
+    }
+}

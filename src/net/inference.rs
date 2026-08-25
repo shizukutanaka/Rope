@@ -1148,11 +1148,6 @@ mod tests {
     use super::*;
 
     /// テスト用チェックポイントを組み立てる (llama2.c legacy v1 レイアウト)。
-    struct Builder {
-        c: Config,
-        secs: Vec<Vec<f32>>,
-    }
-
     pub(super) fn build_checkpoint(c: Config, fill: impl Fn(&str, usize) -> Vec<f32>) -> Vec<u8> {
         let dim = c.dim as usize;
         let hidden = c.hidden_dim as usize;

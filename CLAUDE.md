@@ -151,19 +151,23 @@ W7 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashManag
    git config core.hooksPath .githooks   # 1 度だけ。以後 push 前に自動で走る
    ```
 
-   後者は `src/` の **100% (lib + bin + テスト本体) を rustc に通す** —
-   crates.io 不要。網羅性漏れ (E0004)・型不一致 (E0308)・未定義名 (E0425)・
-   借用エラー (E0382) を検出する (`selftest.sh` が毎回それを実証する)。
-   **rustc 自身の警告も出る** (`unreachable_pattern`/`unused_mut` 等)。
-   CI は `-D warnings` なので、**これを見ずに push すると CI で落ちる**。
-   **これで「コンパイラ無しで削除するのは怖い」という制約は解けている。**
+   `check.sh` は `src/` の **100% を rustc に通す** (crates.io 不要)。
+   網羅性漏れ (E0004)・型不一致 (E0308)・未定義名 (E0425)・借用エラー (E0382)
+   を検出し、**rustc 自身の警告も出る** (`unreachable_pattern` 等 — CI は
+   `-D warnings` なので見ずに push すると落ちる)。`selftest.sh` が毎回それを実証する。
 
-   ⚠️ **ただし `cargo check` の代用であって `cargo test`/`clippy`/`build` では
-   ない。** スタブと実 crate のシグネチャ差・serde の derive 境界・`json!` の
-   中身・clap の引数仕様・`--features http`・**MSRV 1.75 適合**・実行時挙動・
-   暗号的性質は一切検証されない。限界の全文は
+   `run-tests.sh` は **`src/` のテスト 358 件を実際に実行する** (2026-08-18〜)。
+   `core/` も走る — 長らく「core は走らない」と書いていたが**誤り**だった。
+   **これで「コンパイラ無しでは検証できない」という制約は解けている。**
+
+   ⚠️ **ただし走っているのはスタブ経由の挙動である。**
+   最大の既知差: `chrono::DateTime` は実 serde が RFC3339 文字列で書くのに対し
+   スタブは**ナノ秒の数値** — round-trip が通っても実ファイル互換の証明にならない。
+   さらに **暗号は一切本物ではない** (`blake3` は BLAKE3 でなく `ed25519` は
+   Ed25519 でない)。clippy・MSRV 1.75・`--features http` も未検証。
+   限界の全文は
    [`tools/offline-typecheck/README.md`](tools/offline-typecheck/README.md)。
-   「ハーネスが通った」を「ビルドできる」「動く」と言い換えないこと (規範6)。
+   **「ハーネスが緑」を「ビルドできる」「動く」「安全」と言い換えないこと** (規範6)。
 2. **単独レビューを過信しない**: 実例として、`perform_attestation` に `update_stats()` を
    丸ごと配線した変更が `active_sessions` を 0 に巻き戻す回帰を生み、**単独レビューでは
    見逃し、Workflow の多エージェント敵対的レビューでのみ検出された** (commit `66383b9`)。

@@ -43,19 +43,38 @@ Two gates now run offline:
    this by injecting each class and asserting it is caught, so the harness
    cannot silently rot into a vacuous pass.
 
-**What this changes for the codebase**: HEAD **type-checks** as of 2026-08-18.
-Every commit after `830d8c4` had been accumulating as "manual-review-only";
-they are now type-verified, subject to the limits below.
+3. **`tools/offline-typecheck/run-tests.sh`** — **actually runs all 358 tests in
+   `src/`** (2026-08-18). This was the last thing I kept mislabelling: I said
+   repeatedly that "`core/` tests cannot run here". **They already could** —
+   255 of 300 passed the first time I bothered to measure. The blocker was never
+   serde; it was that the shims were written to *type-check* rather than to
+   *work*. Raising them (real hex/base64 encoding, real clock, unique UUIDs, a
+   working PRNG, a distinctness-preserving hash, and a **mini JSON serde with a
+   derive that emits real field-by-field code**) took it to 300/300, plus the 58
+   dependency-free `net/` tests.
+
+**What this changes for the codebase**: HEAD type-checks **and its whole test
+suite executes** as of 2026-08-18. Every commit after `830d8c4` had been
+accumulating as "manual-review-only"; they are now covered by running tests,
+subject to the limits below.
 
 **What it does NOT change — read
 [`tools/offline-typecheck/README.md`](../tools/offline-typecheck/README.md)
-before relying on a PASS.** It is a `cargo check` substitute, not `cargo test`,
-not `cargo clippy`, not `cargo build`. It cannot see: shim-vs-real signature
-drift, serde's per-field derive bounds, `json!` contents, clap argument specs,
-the `--features http` path, MSRV-1.75 compatibility (the local rustc is 1.94),
-clippy lints, any runtime behaviour, or anything cryptographic (the crypto
-stubs return zeros and always verify Ok). **"The harness passes" ≠ "it
-compiles", and emphatically ≠ "it works".** CI remains the shipping gate.
+before relying on a PASS.** The tests run **through stubs**, not through the
+real crates. Known differences that matter:
+- **`chrono::DateTime` serialises as epoch nanoseconds, not RFC3339.** A
+  round-trip test passing proves the *logic* round-trips; it does **not** prove
+  compatibility with a file written by real `serde_json` + `chrono`.
+- The derive understands only the six serde attribute forms this repo uses;
+  anything new is **silently ignored**.
+- 🔴 **Nothing cryptographic is verified.** `blake3` is not BLAKE3, `ed25519` is
+  not Ed25519, `rand` is not a CSPRNG. They preserve "different input →
+  different output" so logic tests can run, and nothing more.
+- Still invisible: clippy lints, MSRV-1.75 compatibility (local rustc is 1.94),
+  the `--features http` path, `json!` contents, clap argument specs.
+
+**"The harness is green" ≠ "it compiles" ≠ "it works" ≠ "it is safe".**
+CI remains the shipping gate.
 
 ---
 
