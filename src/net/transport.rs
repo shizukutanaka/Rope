@@ -277,20 +277,43 @@ pub fn serve_connection(
     }
 }
 
+/// 支払いフレームの送達状況。
+///
+/// bearer token は**送る前にウォレットから消費・永続化される** (at-most-once
+/// spend — クラッシュしても同じ proof を二重送信しない)。その代償として、
+/// 送信に失敗した proof は**戻せない** (nullifier が既に使用済みと記録される
+/// ため、再受領もできない)。だから送達の成否を握り潰さず、呼び出し元に返す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaymentDelivery {
+    /// 支払いを試みなかった (pay が空を返した)
+    NotAttempted,
+    /// Payment フレームの書き込みに成功した
+    Sent,
+    /// 書き込みに失敗した — **消費済みの proof は失われた**
+    Failed,
+}
+
 /// 借り手: 1 件の推論を依頼して結果を受け取る。
+///
+/// `expected_pubkey` は **mDNS 発見時に相手が広告していた公開鍵** (hex)。
+/// `Some` を渡すと、接続先の `Hello` の鍵と一致しない場合に
+/// [`TransportError::UntrustedPeer`] で中断する — 発見と接続の間で相手が
+/// すり替わる MITM をここで検出する (TOFU のピン留め)。
+/// `None` は「初対面をそのまま受け入れる」で、TOFU の初回に相当する。
 #[allow(clippy::too_many_arguments)]
 pub fn request_job(
     stream: &mut TcpStream,
     me: &NodeIdentity,
     signer: &dyn FrameSigner,
     make_verifier: &dyn Fn(&str) -> Option<Box<dyn FrameVerifier>>,
+    expected_pubkey: Option<&str>,
     job_id: &str,
     model: &str,
     prompt: &str,
     max_output_tokens: u32,
     budget_sats: u64,
     pay: &mut dyn FnMut(&Executed) -> Vec<WireProof>,
-) -> Result<Executed, TransportError> {
+) -> Result<(Executed, PaymentDelivery), TransportError> {
     if !plaintext_allowed() {
         return Err(TransportError::PlaintextNotAllowed);
     }
@@ -314,6 +337,13 @@ pub fn request_job(
         Message::Hello { pubkey, .. } => pubkey,
         _ => return Err(TransportError::Protocol("相手の Hello が来ない")),
     };
+    // TOFU ピン: 発見時に広告されていた鍵と違う相手なら、依頼を送る前に切る。
+    // hex は大文字小文字を区別しない (相手側の符号化の癖に依存しない)。
+    if let Some(expected) = expected_pubkey {
+        if !their_pubkey.eq_ignore_ascii_case(expected) {
+            return Err(TransportError::UntrustedPeer(their_pubkey));
+        }
+    }
     let verifier = make_verifier(&their_pubkey)
         .ok_or_else(|| TransportError::UntrustedPeer(their_pubkey.clone()))?;
 
@@ -349,18 +379,27 @@ pub fn request_job(
             // A5: 結果を受け取ってから払う。**払えなくても結果は返す** —
             // 既に受け取ったものを握り潰しても誰も得をしない。未払いは
             // 貸し手側で `paid_sats = 0` として観測される。
+            //
+            // `pay` は proof を返す前にウォレットの消費を**永続化しておく**契約
+            // (spend → persist → send)。したがってここで送信に失敗した proof は
+            // 取り戻せない — 黙って握り潰さず `PaymentDelivery::Failed` で返す。
             let proofs = pay(&ex);
-            if !proofs.is_empty() {
-                let _ = write_frame(
+            let delivery = if proofs.is_empty() {
+                PaymentDelivery::NotAttempted
+            } else {
+                match write_frame(
                     stream,
                     &Message::Payment {
                         job_id: job_id.to_string(),
                         proofs,
                     },
                     signer,
-                );
-            }
-            Ok(ex)
+                ) {
+                    Ok(()) => PaymentDelivery::Sent,
+                    Err(_) => PaymentDelivery::Failed,
+                }
+            };
+            Ok((ex, delivery))
         }
         Message::Reject { reason, .. } => Err(TransportError::Rejected(reason)),
         _ => Err(TransportError::Protocol("JobResult か Reject を期待した")),
@@ -566,11 +605,12 @@ mod tests {
                 node_id: "borrower".into(),
                 pubkey: "0b".into(),
             };
-            let out = request_job(
+            let (out, _delivery) = request_job(
                 &mut c,
                 &me,
                 &FakeSig(0x0b),
                 &tofu,
+                None,
                 "job-1",
                 "demo",
                 "ab",
@@ -626,6 +666,7 @@ mod tests {
                 &me,
                 &FakeSig(0x0b),
                 &tofu,
+                None,
                 "j",
                 "demo",
                 "ab",
@@ -667,6 +708,7 @@ mod tests {
                 &me,
                 &FakeSig(0x0b),
                 &tofu,
+                None,
                 "j",
                 "知らないモデル",
                 "ab",
@@ -682,6 +724,106 @@ mod tests {
             let served = server.join().unwrap();
             assert!(!served.accepted);
             assert!(served.executed.is_none(), "断った依頼は実行しない");
+        });
+    }
+
+    /// TOFU ピン: 発見時に広告されていた鍵と違う相手が応答したら、
+    /// **依頼を送る前に**切る (発見と接続の間の MITM 検出)。
+    #[test]
+    fn a_peer_with_a_different_key_than_advertised_is_refused() {
+        with_plaintext(|| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            // 貸し手は鍵 "0a" を名乗る
+            let server = std::thread::spawn(move || {
+                std::env::set_var("ROPE_ALLOW_PLAINTEXT", "1");
+                let (mut s, _) = listener.accept().unwrap();
+                let me = NodeIdentity {
+                    node_id: "lender".into(),
+                    pubkey: "0a".into(),
+                };
+                let policy = RealPolicy {
+                    engine: engine(),
+                    max_prompt: 4096,
+                };
+                // 借り手が切るのでこちらはエラーで終わる — それで正しい
+                let _ = serve_connection(&mut s, &me, &FakeSig(0x0a), &tofu, &policy);
+            });
+            let mut c = TcpStream::connect(addr).unwrap();
+            let me = NodeIdentity {
+                node_id: "borrower".into(),
+                pubkey: "0b".into(),
+            };
+            // 発見時には "0c" を広告していた、という想定でピンを渡す
+            let err = request_job(
+                &mut c,
+                &me,
+                &FakeSig(0x0b),
+                &tofu,
+                Some("0c"),
+                "j",
+                "demo",
+                "ab",
+                4,
+                100,
+                &mut |_| vec![],
+            )
+            .unwrap_err();
+            match err {
+                TransportError::UntrustedPeer(k) => {
+                    assert_eq!(k, "0a", "実際に名乗られた鍵が報告される")
+                }
+                o => panic!("UntrustedPeer を期待: {o}"),
+            }
+            // 先にソケットを閉じる — 開いたまま join すると、貸し手側が
+            // JobRequest 待ちのタイムアウト (30 秒) を満了するまで返らない
+            drop(c);
+            let _ = server.join();
+        });
+    }
+
+    /// TOFU ピン: 広告どおりの鍵なら通る (大文字小文字は区別しない)。
+    #[test]
+    fn a_matching_advertised_key_passes_the_pin() {
+        with_plaintext(|| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                std::env::set_var("ROPE_ALLOW_PLAINTEXT", "1");
+                let (mut s, _) = listener.accept().unwrap();
+                let me = NodeIdentity {
+                    node_id: "lender".into(),
+                    pubkey: "0a".into(),
+                };
+                let policy = RealPolicy {
+                    engine: engine(),
+                    max_prompt: 4096,
+                };
+                serve_connection(&mut s, &me, &FakeSig(0x0a), &tofu, &policy).unwrap()
+            });
+            let mut c = TcpStream::connect(addr).unwrap();
+            let me = NodeIdentity {
+                node_id: "borrower".into(),
+                pubkey: "0b".into(),
+            };
+            let (out, _) = request_job(
+                &mut c,
+                &me,
+                &FakeSig(0x0b),
+                &tofu,
+                Some("0A"), // 大文字で渡しても一致する
+                "j",
+                "demo",
+                "ab",
+                4,
+                100,
+                &mut |_| vec![],
+            )
+            .unwrap();
+            assert_eq!(out.text, "bbbb");
+            // 同上: 開いたままだと貸し手が支払い待ち (5 秒) を満了してしまう
+            drop(c);
+            let _ = server.join();
         });
     }
 
@@ -705,6 +847,7 @@ mod tests {
             &me,
             &FakeSig(1),
             &tofu,
+            None,
             "j",
             "demo",
             "x",
@@ -805,11 +948,12 @@ mod payment_tests {
                     },
                 ]
             };
-            let out = request_job(
+            let (out, delivery) = request_job(
                 &mut c,
                 &me,
                 &FakeSig(0x0b),
                 &tofu,
+                None,
                 "job-p",
                 "demo",
                 "ab",
@@ -821,6 +965,11 @@ mod payment_tests {
 
             let served = server.join().unwrap();
             assert_eq!(out.text, "bbbb");
+            assert_eq!(
+                delivery,
+                PaymentDelivery::Sent,
+                "支払いは実際に送達されたと報告される"
+            );
             assert_eq!(served.paid_sats, 10, "10 sats を受け取った: {:?}", served);
             assert_eq!(RECEIVED.load(Ordering::SeqCst), 10);
         });
@@ -851,11 +1000,12 @@ mod payment_tests {
                     node_id: "borrower".into(),
                     pubkey: "0b".into(),
                 };
-                let _ = request_job(
+                let (_ex, delivery) = request_job(
                     &mut c,
                     &me,
                     &FakeSig(0x0b),
                     &tofu,
+                    None,
                     "j",
                     "demo",
                     "ab",
@@ -864,6 +1014,11 @@ mod payment_tests {
                     &mut |_| vec![],
                 )
                 .unwrap();
+                assert_eq!(
+                    delivery,
+                    PaymentDelivery::NotAttempted,
+                    "空の支払いは「試みなかった」として報告される"
+                );
                 // ここで c が drop され、貸し手側の読み出しは EOF で即座に返る
             }
             let served = server.join().unwrap();

@@ -606,7 +606,7 @@ fn try_offload_to_peer(
     prompt: &str,
     budget_sats: u64,
 ) -> Result<Option<rope::net::transport::Executed>> {
-    use rope::net::transport::{plaintext_allowed, request_job};
+    use rope::net::transport::{plaintext_allowed, request_job, PaymentDelivery};
 
     if !plaintext_allowed() {
         return Ok(None);
@@ -617,11 +617,19 @@ fn try_offload_to_peer(
     };
     let mut mgr = core::pair::load_pair().unwrap_or_default();
     // ポート 0 を広告しているピア (待受していない) は飛ばす
-    let usable = |m: &core::pair::PairManager| -> Vec<(std::net::SocketAddr, String)> {
+    // 広告された公開鍵も持ち回る — 接続先が本当にその鍵の持ち主かを
+    // `request_job` 側でピン留めするために要る (TOFU)。
+    let usable = |m: &core::pair::PairManager| -> Vec<(std::net::SocketAddr, String, String)> {
         m.discovered
             .iter()
             .filter(|p| p.endpoint.port() != 0 && !p.advertised_pubkey.is_empty())
-            .map(|p| (p.endpoint, p.display_name.clone()))
+            .map(|p| {
+                (
+                    p.endpoint,
+                    p.display_name.clone(),
+                    p.advertised_pubkey.clone(),
+                )
+            })
             .collect()
     };
 
@@ -647,7 +655,7 @@ fn try_offload_to_peer(
     let mut ecash = core::ecash::load_ecash().unwrap_or_default();
     let mut paid_sats = 0u64;
 
-    for (endpoint, display_name) in candidates {
+    for (endpoint, display_name, advertised_pubkey) in candidates {
         println!("📡 {} ({}) に推論を依頼中…", display_name, endpoint);
         let mut stream = match std::net::TcpStream::connect_timeout(
             &endpoint,
@@ -659,10 +667,23 @@ fn try_offload_to_peer(
                 continue;
             }
         };
+        // A5: **spend → persist → send** の順を守る。
+        //
+        // 送信してから永続化すると、その隙間で落ちたときディスクには送信済みの
+        // proof が残る。次にそれを使えば相手の nullifier ストアに二重使用として
+        // 弾かれ、ウォレットに「表示されるが誰も受け取らないトークン」が溜まる。
+        // 先に永続化しておけば、最悪失うのは今回の額だけで済む (at-most-once)。
         let mut pay = |ex: &rope::net::transport::Executed| {
             let amount = price_for(ex, budget_sats);
             match take_payment(&mut ecash, amount) {
                 Ok(proofs) => {
+                    if let Err(e) = core::ecash::save_ecash(&ecash) {
+                        // 永続化できないなら**送らない**。送ってしまうと
+                        // ディスク上は未使用のままの proof が相手に渡り、
+                        // 次回それを使って二重使用扱いになる。
+                        eprintln!("⚠️  ウォレットを保存できないため支払いを中止 ({})", e);
+                        return Vec::new();
+                    }
                     paid_sats = amount;
                     proofs
                 }
@@ -677,6 +698,7 @@ fn try_offload_to_peer(
             &me,
             &signer,
             &tofu_verifier,
+            Some(&advertised_pubkey),
             &job_id,
             model,
             prompt,
@@ -684,15 +706,34 @@ fn try_offload_to_peer(
             budget_sats,
             &mut pay,
         ) {
-            Ok(ex) => {
-                if paid_sats > 0 {
-                    // 支払いが成立した時だけウォレットを永続化する
-                    if let Err(e) = core::ecash::save_ecash(&ecash) {
-                        eprintln!("⚠️  ウォレットを保存できませんでした ({})", e);
+            Ok((ex, delivery)) => {
+                match delivery {
+                    PaymentDelivery::Sent => {
+                        println!("   💸 {} sats を支払いました", paid_sats)
                     }
-                    println!("   💸 {} sats を支払いました", paid_sats);
+                    PaymentDelivery::Failed => {
+                        // 消費は永続化済みなので取り戻せない。黙って成功にしない。
+                        println!(
+                            "   ⚠️  支払いの送信に失敗しました — {} sats は消費済みで取り戻せません",
+                            paid_sats
+                        );
+                    }
+                    PaymentDelivery::NotAttempted => {}
                 }
                 return Ok(Some(ex));
+            }
+            Err(rope::net::transport::TransportError::UntrustedPeer(actual)) => {
+                // 発見時に広告していた鍵と違う相手が応答した = すり替わり。
+                // 数えて残す — この統計は今まで一度も増えたことがなかった。
+                println!(
+                    "   🚫 公開鍵が広告と違います (広告: {} / 実際: {}) — MITM 疑い",
+                    core::short(&advertised_pubkey, 16),
+                    core::short(&actual, 16)
+                );
+                mgr.stats.pubkey_mismatch_rejections += 1;
+                if let Err(e) = core::pair::save_pair(&mgr) {
+                    eprintln!("⚠️  ピア情報を保存できませんでした ({})", e);
+                }
             }
             Err(e) => println!("   断られました ({})", e),
         }
@@ -948,16 +989,36 @@ fn serve_jobs(max_minutes: u32, session: core::session::Session) -> Result<()> {
         earned: std::cell::RefCell<core::ecash::EcashManager>,
         /// 走行中のジョブを記録するセッション (A9→A7 の返金キー)。
         session: std::cell::RefCell<core::session::Session>,
+        /// TOFU の信頼ストア。**誰の計算を受けるかをここで決める** (A2)。
+        pair: std::cell::RefCell<core::pair::PairManager>,
     }
     impl JobPolicy for LocalPolicy {
         fn accept(
             &self,
-            _peer_pubkey: &str,
+            peer_pubkey: &str,
             job_id: &str,
             model: &str,
             _prompt: &str,
             budget_sats: u64,
         ) -> Result<(), String> {
+            // A2: **計算を始める前に**、この相手の計算を受けるか決める。
+            // accept-mode (off / contacts-only) と信頼ストアの判断はここに集約。
+            // 初対面は TOFU として記録される — 次回は「再会」になる。
+            {
+                let mut pair = self.pair.borrow_mut();
+                let level = pair
+                    .transport_trust_gate(peer_pubkey, peer_pubkey)
+                    .map_err(|e| e.to_string())?;
+                // 記録できなくても実行はする (信頼判断自体は既に済んでいる)
+                if let Err(e) = core::pair::save_pair(&pair) {
+                    eprintln!("⚠️  ピア情報を保存できませんでした ({})", e);
+                }
+                println!(
+                    "   🤝 ピア {} を受理 ({})",
+                    core::short(peer_pubkey, 16),
+                    level
+                );
+            }
             // モデル名は外から来る文字列 — パスにする前に必ず無害化する (A9)
             rope::net::inference::safe_model_stem(model).map_err(|e| e.to_string())?;
             if budget_sats == 0 {
@@ -1042,6 +1103,7 @@ fn serve_jobs(max_minutes: u32, session: core::session::Session) -> Result<()> {
         max_output_tokens: 256,
         earned: std::cell::RefCell::new(core::ecash::load_ecash().unwrap_or_default()),
         session: std::cell::RefCell::new(session),
+        pair: std::cell::RefCell::new(core::pair::load_pair().unwrap_or_default()),
     };
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(max_minutes as u64 * 60);
@@ -1106,6 +1168,15 @@ fn serve_jobs(max_minutes: u32, session: core::session::Session) -> Result<()> {
                 );
                 if job.paid_sats == 0 {
                     println!("   (対価は受け取れませんでした — 無償で計算しました)");
+                }
+                // A2: 成功を評判に反映する。既存の昇格規則
+                // (successful_jobs >= 3 で Unknown → Familiar) がこれで初めて動く。
+                {
+                    let mut pair = policy.pair.borrow_mut();
+                    pair.record_job_outcome(&job.peer_pubkey, true);
+                    if let Err(e) = core::pair::save_pair(&pair) {
+                        eprintln!("⚠️  ピア情報を保存できませんでした ({})", e);
+                    }
                 }
             }
             Ok(job) => println!("🚫 {} のジョブを謝絶 (job {})", peer, job.job_id),
