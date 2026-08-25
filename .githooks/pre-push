@@ -78,9 +78,10 @@ if cargo check --all-targets --offline >/dev/null 2>&1; then
     echo "  OK"
 else
     echo "  スキップ (crates.io に到達できません — docs/SURPLUS_AND_GAPS.md §0)"
-    echo "  ⚠️  型検査・テスト・clippy は通りましたが**スタブ経由**です。"
-    echo "      MSRV 1.75・--features http・実 crate との挙動差・暗号的性質は"
-    echo "      未確認のまま。clippy も CI の 1.75 とはバージョンが違います。"
+    echo "  ⚠️  型検査・テスト (既定 + --features http)・clippy は通りましたが"
+    echo "      **スタブ経由**です。MSRV 1.75 (toolchain を取得できない)・"
+    echo "      実 crate との挙動差・暗号的性質・実 mint との通信は未確認。"
+    echo "      clippy も CI の 1.75 とはバージョンが違います。"
 fi
 
 echo

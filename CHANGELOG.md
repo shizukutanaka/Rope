@@ -269,6 +269,19 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Added
 
+- **`--features http` の経路も検査・lint・実行できるようになった** —
+  `reqwest`/`tokio` をスタブ化 (`shims/reqwest.rs`, `shims/tokio.rs`)。
+  - 測ったら `reqwest` の利用面は **9 メソッド + `Url::parse` だけ**、
+    `tokio` はコード上**ゼロ参照** (`http` feature が引いているだけ) だった
+  - `check.sh` / `run-tests.sh` / `lint.sh` に `--cfg 'feature="http"'` の
+    パスを追加。**306 件が走る** (既定より 6 件多い)
+  - 🔴 **`reqwest::send()` は必ず失敗する。** ネットワークに触らないことを
+    型ではなく挙動で示している。**実 mint との通信は検証していない**
+    (CI でも実行しない)
+  - これで CI の 6 ジョブのうち `check`/`test`/`test-http`/`clippy`/`fmt` に
+    相当する検査が、**crates.io 無しで一通り回るようになった**。
+    残る差は **MSRV 1.75** (toolchain を取得できない) と実 crate との挙動差
+
 - **スタブの「本物と同じ」という主張に裏を取った** — `selftest.sh` が
   ハーネス自身に加えて**スタブの正しさ**も検証するようになった。
   - `hex` / `base64` — **RFC 4648 の試験ベクタ**で確認 (`""`/`"f"`/`"fo"`/

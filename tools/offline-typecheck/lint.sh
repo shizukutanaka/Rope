@@ -61,6 +61,8 @@ LIB_EXTERNS=(
     --extern base64="$SHIM/libbase64.rlib"
     --extern rand="$SHIM/librand.rlib"
     --extern ed25519_dalek="$SHIM/libed25519_dalek.rlib"
+    --extern reqwest="$SHIM/libreqwest.rlib"
+    --extern tokio="$SHIM/libtokio.rlib"
 )
 
 # CI (clippy 1.75) に存在しない、新しすぎる lint。
@@ -103,6 +105,13 @@ run_lint "lib" --crate-type lib --crate-name rope --emit=metadata \
 
 run_lint "lib tests" --test --crate-name rope_lib_lint --emit=metadata \
     "$ROOT/src/lib.rs" "${LIB_EXTERNS[@]}" -L "$SHIM" --out-dir "$OUT" || status=1
+
+# CI は `clippy --all-targets --features http` も回す
+run_lint "lib (http)" --cfg 'feature="http"' --crate-type lib --crate-name rope_http \
+    --emit=metadata "$ROOT/src/lib.rs" "${LIB_EXTERNS[@]}" -L "$SHIM" --out-dir "$OUT" || status=1
+
+run_lint "lib tests (http)" --cfg 'feature="http"' --test --crate-name rope_http_lint \
+    --emit=metadata "$ROOT/src/lib.rs" "${LIB_EXTERNS[@]}" -L "$SHIM" --out-dir "$OUT" || status=1
 
 run_lint "bin" --crate-type bin --crate-name rope_bin --emit=metadata \
     "$ROOT/src/main.rs" \

@@ -85,9 +85,15 @@ real crates. Known differences that matter:
   clippy 1.75 does not even have that lint. `lint.sh` suppresses that class by
   default. **Never apply a clippy suggestion without checking the API exists in
   1.75.**
-- Still invisible: **MSRV-1.75 compatibility itself** (local rustc is 1.94 and
-  rustup cannot fetch 1.75 without network), the `--features http` path
-  (reqwest/tokio unstubbed), `json!` contents, clap argument specs.
+- ✅ **The `--features http` path now type-checks, lints and runs** —
+  `reqwest`/`tokio` are stubbed (2026-08-18). 306 tests run under it (6 more
+  than the default build). 🔴 `reqwest::send()` **always fails**: the stub does
+  not touch the network, by behaviour rather than by type. **Real mint traffic
+  is untested** — CI does not exercise it either.
+- Still invisible: **MSRV-1.75 compatibility itself** — measured 2026-08-18:
+  `static.rust-lang.org` is unreachable (`000`) and
+  `rustup toolchain install 1.75.0` fails, so the 1.75 toolchain cannot be
+  obtained here. Also `json!` contents and clap argument specs.
 
 **"The harness is green" ≠ "it compiles" ≠ "it works" ≠ "it is safe".**
 CI remains the shipping gate.

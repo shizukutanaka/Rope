@@ -69,8 +69,9 @@ GitHub の codeload / API も 403 で、crate ソースを別経路から取る�
 | `src/lib.rs --test` | 同上 | **テスト関数の本体も型検査対象** (実行はしない) |
 | `src/main.rs` | ~650 | 4 動詞の CLI 層 |
 | `src/main.rs --test` | 同上 | 同上 |
+| `src/lib.rs` (+`--cfg feature="http"`) | +約 900 | Cashu mint の実 HTTP クライアント |
 
-**`src/` の 100% が対象。**
+**`src/` の 100% が対象** — `#[cfg(feature = "http")]` 配下も含む。
 
 ---
 
@@ -117,7 +118,11 @@ variant を消したら網羅性エラーで即座に分かる。
    `json!` 内の式は**一切型検査されない**。
 4. **clap の引数仕様** — `#[arg(long, default_value = "...")]` は解釈しない。
    CLI の引数定義の誤りは検出できない。
-5. **`--features http` の経路** — `reqwest`/`tokio` はスタブ化していない。
+5. ✅ **`--features http` の経路も検査・実行できるようになった** (2026-08-18)。
+   `reqwest`/`tokio` をスタブ化した (`--cfg 'feature="http"'` で入れる)。
+   🔴 ただし **`reqwest` の `send()` は必ず失敗する** — ネットワークに触らない
+   ことを型ではなく挙動で示している。**実 mint との通信は検証していない**
+   (それは CI でも実行しない)。
 6. **MSRV 1.75 適合** — ここの rustc は 1.94。1.94 で通っても
    1.75 で通るとは限らない (これは CI でしか確かめられない)。
 7. **clippy のバージョン差** — `lint.sh` で clippy は**走る**ようになったが、
@@ -169,6 +174,7 @@ tools/offline-typecheck/
     serde.rs serde_json.rs chrono.rs uuid.rs anyhow.rs
     blake3.rs ed25519_dalek.rs rand.rs base64.rs hex.rs
     tracing.rs dirs.rs clap.rs
+    reqwest.rs tokio.rs        `--features http` 用 (send() は必ず失敗する)
   .build/ .build-tests/       中間生成物 (git 管理外)
 ```
 

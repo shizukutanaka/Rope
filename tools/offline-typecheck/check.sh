@@ -65,8 +65,17 @@ rustc --edition "$EDITION" --crate-type lib --crate-name clap "$SHIMS/clap.rs" \
     -L "$OUT" --out-dir "$OUT" 2>&1 | sed 's/^/  /'
 [ -f "$OUT/libclap.rlib" ] || fail "clap shim のビルド失敗"
 
+# `http` feature 用 (serde に依存する)
+for c in reqwest; do
+    rustc --edition "$EDITION" --crate-type lib --crate-name "$c" "$SHIMS/$c.rs" \
+        --extern serde="$OUT/libserde.rlib" \
+        --extern serde_derive_shim="$OUT/libserde_derive_shim.so" \
+        -L "$OUT" --out-dir "$OUT" 2>&1 | sed 's/^/  /'
+    [ -f "$OUT/lib$c.rlib" ] || fail "$c shim のビルド失敗"
+done
+
 # 独立した shim
-for c in anyhow blake3 hex dirs tracing base64 rand ed25519_dalek; do
+for c in anyhow blake3 hex dirs tracing base64 rand ed25519_dalek tokio; do
     rustc --edition "$EDITION" --crate-type lib --crate-name "$c" "$SHIMS/$c.rs" \
         -L "$OUT" --out-dir "$OUT" 2>&1 | sed 's/^/  /'
     [ -f "$OUT/lib$c.rlib" ] || fail "$c shim のビルド失敗"
@@ -86,6 +95,8 @@ EXTERNS=(
     --extern base64="$OUT/libbase64.rlib"
     --extern rand="$OUT/librand.rlib"
     --extern ed25519_dalek="$OUT/libed25519_dalek.rlib"
+    --extern reqwest="$OUT/libreqwest.rlib"
+    --extern tokio="$OUT/libtokio.rlib"
 )
 
 status=0
@@ -102,6 +113,20 @@ echo "── src/lib.rs のテストコードも型検査 (--test) ──"
 # (shim のデシリアライズは unimplemented! のため実行はできない)。
 rustc --edition "$EDITION" --test --crate-name rope_tests \
     --emit=metadata "$ROOT/src/lib.rs" "${EXTERNS[@]}" \
+    -L "$OUT" --out-dir "$OUT" || status=1
+
+echo
+echo "── src/lib.rs を --features http 相当で型検査 ──"
+# `#[cfg(feature = "http")]` 配下 (Cashu mint の実 HTTP クライアント) は
+# 既定ビルドから外れる。`--cfg` で明示的に入れて、そこも検査対象にする。
+rustc --edition "$EDITION" --cfg 'feature="http"' --crate-type lib \
+    --crate-name rope_http --emit=metadata "$ROOT/src/lib.rs" "${EXTERNS[@]}" \
+    -L "$OUT" --out-dir "$OUT" || status=1
+
+echo
+echo "── src/lib.rs のテストも --features http 相当で型検査 ──"
+rustc --edition "$EDITION" --cfg 'feature="http"' --test \
+    --crate-name rope_http_tests --emit=metadata "$ROOT/src/lib.rs" "${EXTERNS[@]}" \
     -L "$OUT" --out-dir "$OUT" || status=1
 
 echo

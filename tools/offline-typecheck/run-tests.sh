@@ -17,9 +17,12 @@
 # uuid/rand/blake3/hex/base64 を「型が合うだけ」から「実際に動く」ものへ
 # 引き上げたため。JSON は `serde.rs` のミニ実装を通る。
 #
-# 走らないもの: `--features http` (reqwest/tokio 未スタブ)、clippy、
-# MSRV 1.75 適合、そして **実 crate との挙動差**。
-# それらは CI でしか確認できない (`README.md`「検出できないもの」)。
+# **`--features http` も走る** (2026-08-18)。`reqwest`/`tokio` をスタブ化した。
+# ただし `reqwest` の `send()` は**必ず失敗する** — ネットワークに触らないことを
+# 型ではなく挙動で示している。実 mint との通信は CI でも実行しない。
+#
+# 走らないもの: MSRV 1.75 適合 (rustup が 1.75 を取得できない)、
+# **実 crate との挙動差**、暗号的性質。clippy は `lint.sh` で走る。
 
 set -uo pipefail
 
@@ -99,6 +102,38 @@ if rustc --edition "$EDITION" --test --crate-name rope_lib_tests "$ROOT/src/lib.
     "$OUT/libtests" --test-threads=1 || status=1
 else
     echo "❌ core/ のテストビルドに失敗"
+    status=1
+fi
+
+# ------------------------------------------------------------------
+# --features http — `#[cfg(feature = "http")]` 配下も走らせる
+# ------------------------------------------------------------------
+echo
+echo "── --features http 相当でテストビルド ──"
+
+if rustc --edition "$EDITION" --cfg 'feature="http"' --test \
+    --crate-name rope_http_tests "$ROOT/src/lib.rs" \
+    --extern serde="$SHIM/libserde.rlib" \
+    --extern serde_derive_shim="$SHIM/libserde_derive_shim.so" \
+    --extern serde_json="$SHIM/libserde_json.rlib" \
+    --extern chrono="$SHIM/libchrono.rlib" \
+    --extern uuid="$SHIM/libuuid.rlib" \
+    --extern anyhow="$SHIM/libanyhow.rlib" \
+    --extern blake3="$SHIM/libblake3.rlib" \
+    --extern hex="$SHIM/libhex.rlib" \
+    --extern dirs="$SHIM/libdirs.rlib" \
+    --extern tracing="$SHIM/libtracing.rlib" \
+    --extern base64="$SHIM/libbase64.rlib" \
+    --extern rand="$SHIM/librand.rlib" \
+    --extern ed25519_dalek="$SHIM/libed25519_dalek.rlib" \
+    --extern reqwest="$SHIM/libreqwest.rlib" \
+    --extern tokio="$SHIM/libtokio.rlib" \
+    -L "$SHIM" -o "$OUT/httptests" 2>&1 | sed 's/^/  /'; then
+    echo
+    echo "── 実行 (--features http) ──"
+    "$OUT/httptests" --test-threads=1 || status=1
+else
+    echo "❌ --features http のテストビルドに失敗"
     status=1
 fi
 
