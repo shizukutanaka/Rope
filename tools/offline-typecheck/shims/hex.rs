@@ -36,3 +36,33 @@ pub fn decode<T: AsRef<[u8]>>(data: T) -> Result<Vec<u8>, FromHexError> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **「本物と同じ符号化」と主張している以上、既知ベクタで裏を取る。**
+    #[test]
+    fn known_vectors() {
+        assert_eq!(encode([]), "");
+        assert_eq!(encode([0x00]), "00");
+        assert_eq!(encode([0xff]), "ff");
+        assert_eq!(encode([0xde, 0xad, 0xbe, 0xef]), "deadbeef");
+        assert_eq!(encode(b"Hello"), "48656c6c6f");
+        assert_eq!(decode("deadbeef").unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(decode("DEADBEEF").unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(decode("").unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn rejects_bad_input() {
+        assert!(decode("abc").is_err(), "奇数長");
+        assert!(decode("zz").is_err(), "hex でない");
+    }
+
+    #[test]
+    fn roundtrips_all_bytes() {
+        let all: Vec<u8> = (0..=255u8).collect();
+        assert_eq!(decode(encode(&all)).unwrap(), all);
+    }
+}

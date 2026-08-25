@@ -62,9 +62,15 @@ subject to the limits below.
 [`tools/offline-typecheck/README.md`](../tools/offline-typecheck/README.md)
 before relying on a PASS.** The tests run **through stubs**, not through the
 real crates. Known differences that matter:
-- **`chrono::DateTime` serialises as epoch nanoseconds, not RFC3339.** A
-  round-trip test passing proves the *logic* round-trips; it does **not** prove
-  compatibility with a file written by real `serde_json` + `chrono`.
+- ✅ **`chrono::DateTime` now serialises as RFC3339**, matching real
+  `serde` + `chrono`. It previously used epoch nanoseconds, which meant a
+  passing round-trip proved nothing about real-file compatibility. The calendar
+  conversion is Howard Hinnant's exact algorithm and `selftest.sh` pins it
+  against known instants (including 2000/2004/2024 leap days, the 2100
+  non-leap century, and pre-epoch dates) plus **a day-by-day round-trip over a
+  full century**.
+- JSON **key order and whitespace** are not guaranteed to match real
+  `serde_json` — round-trips work, byte-identical output is a CI question.
 - The derive understands only the six serde attribute forms this repo uses;
   anything new is **silently ignored**.
 - 🔴 **Nothing cryptographic is verified.** `blake3` is not BLAKE3, `ed25519` is

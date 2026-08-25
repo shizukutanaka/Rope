@@ -100,3 +100,45 @@ pub mod engine {
     }
     pub use super::{Engine, GeneralPurpose};
 }
+
+#[cfg(test)]
+mod tests {
+    use super::engine::general_purpose::STANDARD;
+    use super::*;
+
+    /// RFC 4648 §10 の試験ベクタ。**「本物と同じ」の裏を取る。**
+    #[test]
+    fn rfc4648_test_vectors() {
+        let cases: &[(&str, &str)] = &[
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ];
+        for (plain, encoded) in cases {
+            assert_eq!(&STANDARD.encode(plain), encoded, "encode {:?}", plain);
+            assert_eq!(
+                STANDARD.decode(encoded).unwrap(),
+                plain.as_bytes(),
+                "decode {:?}",
+                encoded
+            );
+        }
+    }
+
+    #[test]
+    fn roundtrips_arbitrary_bytes() {
+        for len in 0..64usize {
+            let data: Vec<u8> = (0..len).map(|i| (i * 7 + 3) as u8).collect();
+            assert_eq!(STANDARD.decode(STANDARD.encode(&data)).unwrap(), data);
+        }
+    }
+
+    #[test]
+    fn rejects_bad_length() {
+        assert!(STANDARD.decode("Zm9vY").is_err());
+    }
+}

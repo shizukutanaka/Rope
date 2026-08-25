@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # オフライン型検査ハーネスの自己検証。
 #
-# `check.sh` が **何も検出しないのに PASS する** (= 無害に見えて最悪の状態) に
-# 陥っていないことを確かめる。既知の 4 種類の型エラーを注入し、
-# 全て検出されること + 元に戻したら PASS することを確認する。
+# 2 つのことを確かめる:
+#
+# 1. `check.sh` が **何も検出しないのに PASS する** (= 無害に見えて最悪の状態)
+#    に陥っていないこと。既知の 4 種類の型エラーを注入し、全て検出されること +
+#    元に戻したら PASS することを確認する。
+# 2. **shim 自身が正しいこと。** `hex`/`base64` は「本物と同じ符号化」、
+#    `chrono` は「実 chrono と同じ RFC3339」と主張している。既知ベクタ
+#    (RFC 4648、既知の瞬間、一世紀分の日次往復) で裏を取る。
+#    ここが狂うと 358 件が「通っているのに間違っている」状態になる。
 #
 # 作業ツリーは一切汚さない (一時ディレクトリへコピーして実行する)。
 #
@@ -82,6 +88,50 @@ old="pub fn format_plan(plan: &ExecutionPlan) -> String {\n    let mut out = Str
 assert old in s
 open(p,"w",encoding="utf-8").write(s.replace(old,old+"\n    let moved = out;\n    let _ = moved;",1))
 '
+
+# ------------------------------------------------------------------
+# shim 自身のテスト
+# ------------------------------------------------------------------
+#
+# `hex`/`base64` は「本物と同じ符号化」、`chrono` は「実 chrono と同じ
+# RFC3339」と主張している。**主張には裏を取る** — 既知ベクタで検証する。
+# ここが狂うと、上の 358 件が「通っているのに間違っている」状態になる。
+
+echo
+echo "── shim 自身の検証 (既知ベクタ) ──"
+
+SHIMS_DIR="$ROOT/tools/offline-typecheck/shims"
+SHIM_OUT="$TMP/shimtest"
+mkdir -p "$SHIM_OUT"
+ROPE_TYPECHECK_OUT="$SHIM_OUT/.build" "$ROOT/tools/offline-typecheck/check.sh" >/dev/null 2>&1
+
+shim_test() {
+    local m="$1"
+    shift
+    if ! rustc --edition 2021 --test --crate-name "${m}_selftest" \
+        "$SHIMS_DIR/$m.rs" "$@" -o "$SHIM_OUT/${m}_t" >"$SHIM_OUT/$m.log" 2>&1; then
+        echo "  ❌ $m: テストのビルドに失敗"
+        sed 's/^/     /' "$SHIM_OUT/$m.log" | head -10
+        failures=$((failures + 1))
+        return
+    fi
+    if "$SHIM_OUT/${m}_t" >>"$SHIM_OUT/$m.log" 2>&1; then
+        local n
+        n=$(grep -oE "^test result: ok\. [0-9]+" "$SHIM_OUT/$m.log" | grep -oE "[0-9]+$" | head -1)
+        echo "  ✅ $m (${n:-?} 件)"
+    else
+        echo "  ❌ $m: テスト失敗"
+        grep -E "^(test |assertion|thread)" "$SHIM_OUT/$m.log" | head -10 | sed 's/^/     /'
+        failures=$((failures + 1))
+    fi
+}
+
+shim_test hex
+shim_test base64
+shim_test chrono \
+    --extern serde="$SHIM_OUT/.build/libserde.rlib" \
+    --extern serde_derive_shim="$SHIM_OUT/.build/libserde_derive_shim.so" \
+    -L "$SHIM_OUT/.build"
 
 echo
 echo "── 元に戻したら PASS するか ──"
