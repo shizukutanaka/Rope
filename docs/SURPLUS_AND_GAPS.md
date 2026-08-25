@@ -462,10 +462,62 @@ token** — now actually happens over the wire:
        (an explicit "obfuscation only / no guarantee" variant)
     3. Treat consumer GPUs as **non-sensitive workloads only**
 
+### 1.17 🔴 Enabling CI today would FAIL — the locked dependency graph has moved past MSRV 1.75 `[OPEN, blocks CI enablement]`
+
+**Found 2026-08-18 by `tools/offline-typecheck/check-deps-msrv.sh`.** This is the
+single most important finding for §1.5: the repo owner's "one command" to enable
+CI **would not produce a green build**.
+
+**How it was measurable here at all**: `static.crates.io` (crate bodies) is 403,
+but **`index.crates.io` (metadata) returns 200**. The sparse index carries each
+version's `rust_version`, so every one of the 217 locked packages can be checked
+**without downloading a single crate**.
+
+**Result**: 29 of 217 declare a `rust-version` above 1.75. Split by which CI job
+they break (reachability computed from `Cargo.lock`'s dependency graph, treating
+`reqwest`/`tokio` as the `http`-feature roots):
+
+- **Default build (`check`/`test`/`clippy`/`fmt`)**: the 10 violations reachable
+  here are all platform-gated (`windows-*`, `wasm-bindgen*`, `js-sys`,
+  `wasip2`, `wit-bindgen`) and **do not compile on `ubuntu-latest`**. These
+  jobs should pass.
+- 🔴 **`test-http` and `clippy --features http`: 17 host-relevant violations.**
+  They come in through `reqwest`:
+  - `hyper-rustls 0.27.9` → 1.85
+  - the `idna_adapter 1.2.2` → `icu_*` 2.2.0 chain → **1.86**
+  - `zerovec` 1.83, `yoke`/`litemap`/`tinystr`/`writeable`/`zerotrie`/
+    `potential_utf` 1.82, `rustc-hash` 1.77
+  These **do** compile on Linux. **Those two jobs fail on 1.75.**
+
+**Why this happened**: `Cargo.toml` already carries upper bounds
+(`base64ct = ">=1, <1.7"`, `getrandom = ">=0.2, <0.3"`, …) precisely to hold the
+MSRV line. Those bounds were correct when written — but **a different transitive
+dependency raised its floor afterwards**. That is not a one-time mistake; it is
+the steady-state behaviour of a pinned-MSRV project, which is why this check now
+runs in the gate.
+
+**Three options — this is a `decision`, not something to fix silently:**
+1. **Raise the MSRV.** Bump `Cargo.toml`'s `rust-version` and the CI toolchain
+   past 1.86. The original 1.75 choice was for `async fn in trait`; the
+   ecosystem has moved well past it. Probably the honest answer.
+2. **Pin the transitive deps down** (`idna_adapter < 1.2`, `hyper-rustls` older,
+   …) following the existing pattern. ⚠️ **Cannot be verified here** — resolving
+   the graph needs cargo, and a wrong bound makes it unsolvable, which is worse
+   than the current clear failure.
+3. **Drop the `http` jobs from CI.** The `http` feature is off by default and its
+   only consumer (`cashu_mint`) is not wired to any verb yet.
+
+⚠️ **Do not apply option 2 blind.** 55 of the 217 packages declare no
+`rust_version` at all, so this check is a lower bound on the problem, not a
+proof of the remainder.
+
 ### 1.5 CI defined but not activated `[BLOCKED:permission — interim gate added 2026-08-18]`
 
 > **Still blocked, and still one command for the repo owner**:
 > `git mv .github/ci.yml.disabled .github/workflows/ci.yml`.
+> 🔴 **But that command alone would not produce a green build** — see §1.17:
+> the locked dependency graph has moved past MSRV 1.75 and would fail
+> `test-http` and `clippy --features http`. Read §1.17 before enabling.
 > Neither the git gateway nor the GitHub App has `workflows` permission
 > (both paths measured returning 403).
 >

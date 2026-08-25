@@ -269,6 +269,38 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Added
 
+- **🔴 `tools/offline-typecheck/check-deps-msrv.sh` — CI を有効化すると
+  落ちることを発見した** (`SURPLUS_AND_GAPS.md` §1.17)。
+  - **`static.crates.io` は 403 だが `index.crates.io` は 200** — sparse index
+    は各バージョンの `rust_version` を持つので、**crate を 1 つも
+    ダウンロードせずに** `Cargo.lock` の 217 パッケージ全部を検査できる
+  - **結果: 29 件が MSRV 1.75 を超えている。** `Cargo.lock` の依存グラフで
+    到達可能性を計算し、どの CI ジョブに効くかで切り分けた:
+    - 既定ビルドで到達する 10 件は全て別プラットフォーム専用
+      (`windows-*`/`wasm-bindgen*`/`js-sys`/`wasip2`/`wit-bindgen`) で、
+      `ubuntu-latest` ではコンパイルされない → **これらのジョブは通る見込み**
+    - 🔴 **`test-http` と `clippy --features http` に効く違反が 17 件。**
+      `reqwest` 経由で入る `hyper-rustls` (1.85)、
+      `idna_adapter`→`icu_*` の鎖 (**1.86**)、`zerovec` (1.83) ほか。
+      **Linux でコンパイルされるので、この 2 ジョブは 1.75 で落ちる**
+  - **なぜ起きたか**: `Cargo.toml` の上限 (`base64ct`, `getrandom` 等) は
+    書いた当時は正しかったが、**別の transitive 依存が後から床を上げた**。
+    MSRV を固定するプロジェクトでは一度きりの事故ではなく定常的に起きる。
+    そこで `.githooks/pre-push` に **5/6 の「助言」ステップとして**入れた —
+    **push はブロックしない**。理由は (a) `index.crates.io` への到達性に
+    依存するのでネットワーク事情で push が止まるのは筋が悪い、
+    (b) 検出される違反は既知の未解決事項 (§1.17) であって、その push が
+    持ち込んだ回帰ではないため。ただし**黙らせない** — 検出時は違反の要約を
+    そのまま表示する
+  - 選択肢 3 つ (MSRV を上げる / 上限を足す / http ジョブを外す) を §1.17 に
+    記載。**どれも製品判断**なので勝手に適用しない。特に「上限を足す」は
+    cargo 無しでは解けるか検証できず、間違えると現状より悪くなる
+  - ⚠️ 217 件中 **55 件は `rust_version` を宣言しておらず判定不能**。
+    この検査は問題の下限であって、残りの証明ではない
+- CI の 3 経路目 (`create_or_update_file`) も **403 を実測**。
+  git gateway / `push_files` と合わせて**3 経路すべてで拒否**され、
+  CI 有効化が所有者専用であることが確定した
+
 - **MSRV 1.75 適合をこの環境で検査できるようになった** — toolchain 無しで。
   - 「1.75 の toolchain が取れないから検査できない」と書いていたが、
     **要件は toolchain を持つことではなく「1.75 より新しい API を使って

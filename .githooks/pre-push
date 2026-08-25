@@ -41,35 +41,52 @@ fail() {
     exit 1
 }
 
-echo "── 1/5 rustfmt ──"
+echo "── 1/6 rustfmt ──"
 mapfile -t rs_files < <(git ls-files 'src/*.rs' 'src/**/*.rs' 'examples/*.rs' 2>/dev/null)
 if [ "${#rs_files[@]}" -gt 0 ]; then
     rustfmt --edition 2021 --check "${rs_files[@]}" || fail "rustfmt"
 fi
 echo "  OK"
 
-echo "── 2/5 オフライン型検査 ──"
+echo "── 2/6 オフライン型検査 ──"
 ./tools/offline-typecheck/check.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/check.sh
     fail "型検査"
 }
 echo "  OK"
 
-echo "── 3/5 テストを実行 (src/ 全体) ──"
+echo "── 3/6 テストを実行 (src/ 全体) ──"
 ./tools/offline-typecheck/run-tests.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/run-tests.sh
     fail "テスト"
 }
 echo "  OK"
 
-echo "── 4/5 clippy + MSRV 1.75 ──"
+echo "── 4/6 clippy + MSRV 1.75 ──"
 ./tools/offline-typecheck/lint.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/lint.sh
     fail "clippy"
 }
 echo "  OK"
 
-echo "── 5/5 cargo (使えれば) ──"
+echo "── 5/6 依存グラフの MSRV (助言) ──"
+# **push をブロックしない。** 理由は 2 つ:
+#   1. index.crates.io への到達性に依存するので、ネットワーク事情で
+#      push が止まるのは筋が悪い
+#   2. 検出される違反は既知の未解決事項 (docs/SURPLUS_AND_GAPS.md §1.17)
+#      であって、この push が持ち込んだ回帰ではない
+# ただし**黙らせない** — 検出したら目立つ形で出す。
+if ./tools/offline-typecheck/check-deps-msrv.sh >/tmp/rope-deps-msrv.$$ 2>&1; then
+    echo "  OK (Cargo.lock の依存に MSRV 1.75 超は無し)"
+else
+    echo "  ⚠️  依存グラフに MSRV 1.75 超あり — CI を有効化すると落ちます。"
+    echo "      詳細: docs/SURPLUS_AND_GAPS.md §1.17 (製品判断が要る)"
+    sed -n '/^❌/,$p' /tmp/rope-deps-msrv.$$ | sed 's/^/      /'
+    echo "      (push はブロックしません — 既知の未解決事項のため)"
+fi
+rm -f /tmp/rope-deps-msrv.$$
+
+echo "── 6/6 cargo (使えれば) ──"
 if cargo check --all-targets --offline >/dev/null 2>&1; then
     echo "  cargo が使えます。本物のゲートを回します。"
     cargo test --all-targets || fail "cargo test"

@@ -8,10 +8,11 @@
 「本物と同じ」と主張する以上、裏を取らなければ意味がない。
 
 ```sh
-tools/offline-typecheck/check.sh      # 型検査: src/ 全体 (約 2.5 秒)
-tools/offline-typecheck/run-tests.sh  # テスト 358 件を**実際に実行**
-tools/offline-typecheck/lint.sh       # clippy (registry 不要)
-tools/offline-typecheck/selftest.sh   # ハーネス自体の健全性検証
+tools/offline-typecheck/check.sh           # 型検査: src/ 全体 (約 2.5 秒)
+tools/offline-typecheck/run-tests.sh      # テスト 358 件を**実際に実行**
+tools/offline-typecheck/lint.sh           # clippy + MSRV (registry 不要)
+tools/offline-typecheck/check-deps-msrv.sh # 依存の MSRV (index のみ使用)
+tools/offline-typecheck/selftest.sh       # ハーネス自体の健全性検証
 ```
 
 **`clippy-driver` は toolchain 同梱で registry を必要としない。**
@@ -146,6 +147,17 @@ variant を消したら網羅性エラーで即座に分かる。
    違う」だけの非暗号実装で、**ロジックのテストを通すためだけに存在する**。
    衝突耐性・原像計算困難性・鍵の安全性は**一切保証しない**。
    セキュリティの検証にこのハーネスを使ってはいけない。
+
+10. **依存グラフの MSRV 検査は「下限」でしかない**
+    (`check-deps-msrv.sh`)。`index.crates.io` は 200 なので `Cargo.lock` の
+    217 パッケージの `rust_version` を crate 本体無しで読めるが:
+    - **55 件は `rust_version` を宣言していない** — 判定不能。宣言が無い =
+      古い crate であることが多いが、**保証ではない**
+    - `Cargo.lock` は `cfg(target)` を持たないので、
+      「別プラットフォーム専用だから ubuntu では無関係」の判定は
+      **crate 名からの推定**であって確証ではない
+    - 宣言された `rust_version` を見るだけで、**実際に 1.75 でビルドしたわけ
+      ではない**。構文・借用検査の版差は見えない
 
 ### 一言でいうと
 
