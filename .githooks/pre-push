@@ -21,18 +21,23 @@
 # 1. rustfmt (構文と整形)
 # 2. オフライン型検査 — `src/` 全体を rustc に通す
 # 3. `src/` のテスト 358 件を**実際に実行** (core/ も含む)
-# 4. clippy + **MSRV 1.75 適合検査** (`clippy-driver` は registry 不要)
+# 4. clippy + **MSRV 適合検査** (`clippy-driver` は registry 不要)
 # 5. `cargo` が使えるなら本物のゲート (build/test/clippy/fmt)
 #
 # 1-4 は crates.io 不要。5 は使える環境でだけ走る。
 #
-# ⚠️ 4 の clippy は toolchain 同梱の最新版で、**CI の 1.75 とは違う**。
+# ⚠️ 4 の clippy は toolchain 同梱の最新版で、**CI が固定する版とは違う**。
 #    提案を機械的に適用すると MSRV を壊すことがある (lint.sh 冒頭を参照)。
 
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT" || exit 1
+
+# MSRV は **Cargo.toml だけを情報源にする**。表示にハードコードすると、
+# 上げたときにメッセージだけ古い値のまま残って嘘をつく (実際に起きた)。
+MSRV="$(sed -n 's/^rust-version = "\([^"]*\)".*/\1/p' Cargo.toml | head -1)"
+MSRV="${MSRV:-?}"
 
 fail() {
     echo
@@ -62,7 +67,7 @@ echo "── 3/6 テストを実行 (src/ 全体) ──"
 }
 echo "  OK"
 
-echo "── 4/6 clippy + MSRV 1.75 ──"
+echo "── 4/6 clippy + MSRV $MSRV ──"
 ./tools/offline-typecheck/lint.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/lint.sh
     fail "clippy"
@@ -77,9 +82,9 @@ echo "── 5/6 依存グラフの MSRV (助言) ──"
 #      であって、この push が持ち込んだ回帰ではない
 # ただし**黙らせない** — 検出したら目立つ形で出す。
 if ./tools/offline-typecheck/check-deps-msrv.sh >/tmp/rope-deps-msrv.$$ 2>&1; then
-    echo "  OK (Cargo.lock の依存に MSRV 1.75 超は無し)"
+    echo "  OK (Cargo.lock の依存に MSRV $MSRV 超は無し)"
 else
-    echo "  ⚠️  依存グラフに MSRV 1.75 超あり — CI を有効化すると落ちます。"
+    echo "  ⚠️  依存グラフに MSRV $MSRV 超あり — CI を有効化すると落ちます。"
     echo "      詳細: docs/SURPLUS_AND_GAPS.md §1.17 (製品判断が要る)"
     sed -n '/^❌/,$p' /tmp/rope-deps-msrv.$$ | sed 's/^/      /'
     echo "      (push はブロックしません — 既知の未解決事項のため)"
@@ -95,11 +100,11 @@ if cargo check --all-targets --offline >/dev/null 2>&1; then
     echo "  OK"
 else
     echo "  スキップ (crates.io に到達できません — docs/SURPLUS_AND_GAPS.md §0)"
-    echo "  ⚠️  型検査・テスト (既定 + --features http)・clippy・MSRV 1.75 は"
+    echo "  ⚠️  型検査・テスト (既定 + --features http)・clippy・MSRV $MSRV は"
     echo "      通りましたが**スタブ経由**です。実 crate との挙動差・"
     echo "      暗号的性質・実 mint との通信は未確認。"
-    echo "      MSRV は API 安定化表による検査で、1.75 で実際にビルドしたわけでは"
-    echo "      ありません。clippy も CI の 1.75 とはバージョンが違います。"
+    echo "      MSRV は API 安定化表による検査で、$MSRV で実際にビルドしたわけでは"
+    echo "      ありません。clippy も CI が固定する版とはバージョンが違います。"
 fi
 
 echo

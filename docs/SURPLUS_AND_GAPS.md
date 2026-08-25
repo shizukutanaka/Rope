@@ -462,7 +462,51 @@ token** — now actually happens over the wire:
        (an explicit "obfuscation only / no guarantee" variant)
     3. Treat consumer GPUs as **non-sensitive workloads only**
 
-### 1.17 🔴 Enabling CI today would FAIL — the locked dependency graph has moved past MSRV 1.75 `[OPEN, blocks CI enablement]`
+### 1.17 Enabling CI would have FAILED — the locked graph had moved past MSRV 1.75 `[RESOLVED 2026-08-18 by raising MSRV to 1.86]`
+
+> **Resolved by option 1 (raise the MSRV), measured rather than guessed.**
+>
+> `check-deps-msrv.sh` was re-run against candidate MSRVs on a scratch copy of
+> `Cargo.toml`/`Cargo.lock`:
+>
+> | MSRV | 超過 | ホスト関連 |
+> |---|---|---|
+> | 1.82 | 12 | 10 |
+> | 1.85 | 9 | 8 |
+> | **1.86** | **1** | **0** |
+> | 1.87 | 0 | 0 |
+>
+> **1.86 is the minimum that clears every host-relevant violation.** The single
+> remainder at 1.86 is `wasip2 1.0.3` (1.87), which is wasm-only and does not
+> compile on `ubuntu-latest`. 1.87 would clear it too, but raising the floor
+> higher than the problem requires is a gratuitous requirement — 1.86 it is.
+>
+> Changed in three places, which **must stay in agreement** (`lint.sh` fails if
+> `Cargo.toml` and `clippy.toml` disagree):
+> - `Cargo.toml` `rust-version = "1.86"`
+> - `clippy.toml` `msrv = "1.86.0"`
+> - `.github/ci.yml.disabled` — 5 × `dtolnay/rust-toolchain@1.86.0`
+>
+> **Why raising was the right option**: 1.75 was chosen for `async fn in trait`.
+> Holding that floor now costs a set of upper bounds in `Cargo.toml`, and it was
+> the *dependency graph*, not this crate's code, that moved. Option 2 (pin the
+> transitive deps down) **cannot be verified without cargo** — a wrong bound makes
+> the graph unsolvable, which is worse than a clear failure. Option 3 (drop the
+> `http` CI jobs) would have removed coverage to hide the problem.
+>
+> **Follow-on now unlocked (do NOT do it blind)**: the upper bounds in
+> `Cargo.toml` (`base64ct <1.7`, `getrandom <0.3`, `cpufeatures <0.3`, …) exist
+> **only to avoid edition2024**, which is stable since 1.85. At MSRV 1.86 they are
+> technically unnecessary — but removing one makes cargo re-resolve and possibly
+> raise the floor again. **Drop them one at a time, with cargo available**, and
+> re-run `check-deps-msrv.sh` after each. A comment in `Cargo.toml` says so.
+>
+> ⚠️ **What this does not prove**: 55 of 217 packages declare no `rust_version`
+> at all, and `Cargo.lock` carries no `cfg(target)` so the platform-specific
+> classification is inferred from crate names. **This is a lower bound.** The
+> claim is "no declared dependency floor exceeds 1.86", not "it builds on 1.86".
+
+**Original finding, kept for context:**
 
 **Found 2026-08-18 by `tools/offline-typecheck/check-deps-msrv.sh`.** This is the
 single most important finding for §1.5: the repo owner's "one command" to enable
@@ -515,9 +559,9 @@ proof of the remainder.
 
 > **Still blocked, and still one command for the repo owner**:
 > `git mv .github/ci.yml.disabled .github/workflows/ci.yml`.
-> 🔴 **But that command alone would not produce a green build** — see §1.17:
-> the locked dependency graph has moved past MSRV 1.75 and would fail
-> `test-http` and `clippy --features http`. Read §1.17 before enabling.
+> ✅ **The MSRV trap that would have made that command fail is gone** (§1.17:
+> MSRV raised 1.75 → 1.86, measured to clear every host-relevant violation).
+> The remaining blocker is purely the `workflows` permission.
 > Neither the git gateway nor the GitHub App has `workflows` permission
 > (both paths measured returning 403).
 >

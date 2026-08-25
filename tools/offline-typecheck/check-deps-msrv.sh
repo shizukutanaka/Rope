@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# `Cargo.lock` で固定された依存が、全て MSRV 1.75 で使えるかを確かめる。
+# `Cargo.lock` で固定された依存が、全て MSRV (Cargo.toml の
+# `rust-version`) で使えるかを確かめる。
 #
 #   tools/offline-typecheck/check-deps-msrv.sh
 #
 # ## なぜ必要か
 #
-# CI (`.github/ci.yml.disabled`) は **Rust 1.75 に固定**されている。
-# 依存のどれか 1 つでも `rust-version` を 1.75 より上げていたら、
+# CI (`.github/ci.yml.disabled`) は **`Cargo.toml` の `rust-version` と同じ版に
+# 固定**されている。依存のどれか 1 つでもそれより上を要求していたら、
 # `cargo check` が**最初のジョブで落ちる**。
 #
 # それはこのリポジトリで**実際に何度も起きた問題**である —
@@ -218,7 +219,7 @@ if violations:
 
     if default_v or http_v:
         print(f"❌ ホスト上でコンパイルされる違反が {len(default_v) + len(http_v)} 件。")
-        print("   このまま CI (1.75 固定) を有効化すると落ちます。取りうる手:")
+        print(f"   このまま CI ({msrv} 固定) を有効化すると落ちます。取りうる手:")
         print("   (a) CI と Cargo.toml の rust-version を上げる  ← 製品判断")
         print("   (b) Cargo.toml に上限を足して古いバージョンへ固定する")
         print("   (c) CI から --features http のジョブを外す")

@@ -21,7 +21,7 @@
 # ただし `reqwest` の `send()` は**必ず失敗する** — ネットワークに触らないことを
 # 型ではなく挙動で示している。実 mint との通信は CI でも実行しない。
 #
-# 走らないもの: MSRV 1.75 適合 (rustup が 1.75 を取得できない)、
+# 走らないもの: MSRV 適合の実ビルド (rustup が古い toolchain を取得できない)、
 # **実 crate との挙動差**、暗号的性質。clippy は `lint.sh` で走る。
 
 set -uo pipefail
@@ -141,7 +141,7 @@ echo
 if [ "$status" -eq 0 ]; then
     echo "✅ テストは実際に実行され、全て PASS した"
     echo "   ⚠️  ただし **スタブ経由**である。実 crate との挙動差・clippy・"
-    echo "       MSRV 1.75・--features http は未確認 (CI が必要)。"
+    echo "       MSRV の実ビルドは未確認 (CI が必要)。"
     echo "       特に暗号 (blake3/ed25519/rand) は本物ではない — README.md 参照。"
 else
     echo "❌ テスト失敗"

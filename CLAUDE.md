@@ -122,7 +122,7 @@ W7 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashManag
 | 🔶 **2** | **A5: 配線は完了 (2026-08-18)** — bearer token が実際にワイヤを渡り貸し手のウォレットに入る (テスト 2 件が実ソケットで PASS)。⚠️ **残るのは中身**: `build_proof` がプレースホルダなので**実 mint では拒否される**。DLEQ (NUT-12) も価格交渉も未実装 | `build` (k256) | [`CASHU_BDHKE_IMPLEMENTATION_READINESS.md`](docs/CASHU_BDHKE_IMPLEMENTATION_READINESS.md)。**escrow をこの経路に足す前に §1.12 を読むこと** — 借り手が先に結果を得る流れなので、守るべきは貸し手側であり、現行 escrow はそれを守らない |
 | ~~**3**~~ | ✅ **A1: 完了 (2026-08-18)** — 発見 (`mdns.rs`) と転送 (`wire.rs`/`transport.rs`)。テスト 26 件が実走。**Iroh は使わなかった**。⚠️ **暗号化のみ未実装** — `snow` を追加できず、§1.1 が手書きを禁じるため。転送は既定で無効 (`ROPE_ALLOW_PLAINTEXT=1` が要る) | ✅ 済 (暗号化を除く) | `SURPLUS_AND_GAPS.md` §1.1・§1.2 |
 | ~~**4**~~ | ✅ **`A9→A7`: 完了 (2026-08-18)** — `panic_stop` がセッションファイルを消す**前に**未完了 escrow を返金する。`Session.job_id` (`#[serde(default)]`) が結合キー、`JobPolicy::accept` が実行前に刻む。完了済みの除外は `refund_escrow` の既存ガードで自動的に成立 (claw-back 攻撃不可) | ✅ 済 | `SURPLUS_AND_GAPS.md` §1.10。**残るのは `panic_stop` の呼び出し元** — シグナルハンドラ未配線 (§2.4) |
-| 5 | ⑤ **CI 有効化** — ⚠️ **「あと 1 手」ではない** | **`権限` + `decision`** | 権限: git gateway・GitHub App・`create_or_update_file` の**3 経路すべてで 403 実測**。所有者しか有効化できない。**しかも今有効化すると落ちる** — `Cargo.lock` の依存が MSRV 1.75 を超えており (`test-http` と `clippy --features http` に効く違反が 17 件)、`SURPLUS_AND_GAPS.md` §1.17 に選択肢 3 つを記載。**MSRV を上げるかどうかは製品判断** |
+| 5 | ⑤ **CI 有効化 — 残るのは権限のみ** | **`権限`** | 権限: git gateway・GitHub App・`create_or_update_file` の**3 経路すべてで 403 実測**。所有者が `git mv .github/ci.yml.disabled .github/workflows/ci.yml` するしかない。~~しかも今有効化すると落ちる~~ → **MSRV を 1.75 → 1.86 に上げて解消** (§1.17。1.86 が host 関連違反をゼロにする実測下限)。**MSRV は `Cargo.toml`/`clippy.toml`/CI の 3 箇所で一致必須** — `lint.sh` がずれを検出して落ちる |
 | — | ecash マネーパスの既知不整合 (§1.8/§1.9) | — | **A5 結線 (順 2) と同時に必ず直す** |
 
 **v2 へ延期した項目の根拠**は消えていない — 戻す時は
@@ -178,7 +178,7 @@ W7 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashManag
 4. **後方互換性**: 永続化 JSON (`~/.rope/*.json`) のフォーマット変更は既存ファイルの
    読込を壊さないこと。新規フィールドは `#[serde(default)]`。`load_or_recover` の
    破損復旧パターンを踏襲。
-5. **コーディング規約**: `unsafe` 禁止 / MSRV 1.75 / edition2024 回避 (上限固定パターン) /
+5. **コーディング規約**: `unsafe` 禁止 / **MSRV 1.86** (2026-08-18 に 1.75 から引上、§1.17) / `Cargo.toml` の上限固定は edition2024 回避の名残 — **外すには cargo が要る** /
    品質ゲート全通過。詳細は [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 6. **正直さの文化**: 「動くフリ」を絶対にしない。デモ・出力・ドキュメントは実態と
    一致させる。プレースホルダは `SECURITY.md` の分離開示に従う。

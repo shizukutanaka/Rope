@@ -2,7 +2,7 @@
 name = "rope"
 version = "0.2.14"
 edition = "2021"
-rust-version = "1.75"  # async fn in trait (stabilized 1.75)
+rust-version = "1.86"  # 依存グラフの実測下限 (下記)
 authors = ["Rope Contributors"]
 description = "他人のアイドル GPU を、安全に、1 ドル未満で 60 秒借りる方法"
 license = "MIT"
@@ -34,7 +34,14 @@ blake3 = ">=1, <1.6"
 rand = "0.8"
 base64 = "0.22"
 
-# transitive 1.75 互換固定
+# ⚠️ 以下の上限は **MSRV 1.75 時代に edition2024 を避けるため**に置いたもの。
+# MSRV を 1.86 に上げた今 (edition2024 は 1.85 で安定) 技術的な必要は消えたが、
+# **外していない** — 外すと cargo が新しい版を選び直し、MSRV がさらに上がる
+# 可能性がある。それを確かめるには依存グラフの再解決 (= cargo) が要るが、
+# この環境では `static.crates.io` が 403 で不可 (docs/SURPLUS_AND_GAPS.md §0)。
+# **cargo が使えるようになったら、1 つずつ外して再解決を確認すること。**
+#
+# transitive 互換固定
 # blake3 → cpufeatures が最新版で edition2024 要求
 cpufeatures = { version = ">=0.2, <0.3", optional = false }
 

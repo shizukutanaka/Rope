@@ -10,32 +10,33 @@
 # ## 🔴 CI の clippy とは**バージョンが違う**
 #
 # ここの clippy は toolchain 同梱の最新版 (1.94 系)。
-# CI は `.github/ci.yml.disabled` で **1.75.0 に固定**されている。
+# CI は `.github/ci.yml.disabled` で **`Cargo.toml` の `rust-version` と
+# 同じ版に固定**されている。
 #
 # つまり:
 # - **ここで出る lint が CI では出ないことがある** (新しい lint)
-# - **その提案に従うと MSRV 1.75 を壊すことがある**
+# - **その提案に従うと MSRV を壊すことがある**
 #
 # 実例 (2026-08-18): `clippy::manual_is_multiple_of` が
 # `net/inference.rs` の 3 箇所で `x % y != 0` を `!x.is_multiple_of(y)` に
 # 直せと言うが、**`is_multiple_of` は Rust 1.87 で安定化**した API であり、
-# **1.75 ではコンパイルできない**。CI の clippy 1.75 にはこの lint 自体が
+# **MSRV ではコンパイルできない**。CI の古い clippy にはこの lint 自体が
 # 無いので、**直さないのが正しい**。
 #
-# → **提案を機械的に適用しないこと。** 1.75 に存在する API かを必ず確認する。
+# → **提案を機械的に適用しないこと。** MSRV に存在する API かを必ず確認する。
 #
 # 既定では「新しすぎて CI に無い」lint を抑止する。全部見たい場合は
 # `ROPE_LINT_ALL=1` を付ける。
 #
-# ## ✅ MSRV 1.75 も**ここで検証できる**
+# ## ✅ MSRV も**ここで検証できる**
 #
-# `rustup` は 1.75 toolchain を取得できない (static.rust-lang.org 到達不能) が、
+# `rustup` は古い toolchain を取得できない (static.rust-lang.org 到達不能) が、
 # **clippy の `incompatible_msrv` は toolchain を必要としない** — 各 API の
 # 安定化バージョンを内部表から引いて、`clippy.toml` の `msrv` と比べるだけ。
-# リポジトリ直下の `clippy.toml` に `msrv = "1.75.0"` を置いてある
+# リポジトリ直下の `clippy.toml` に `msrv` を置いてある
 # (`Cargo.toml` の `rust-version` と一致させること)。
 #
-# これで「1.75 でコンパイルできるか」を、1.75 を持たずに検査できる。
+# これで「MSRV でコンパイルできるか」を、その toolchain を持たずに検査できる。
 # `selftest.sh` が 1.87 の API を注入して**検出力を毎回実証する**。
 
 set -uo pipefail
@@ -95,7 +96,7 @@ LIB_EXTERNS=(
     --extern tokio="$SHIM/libtokio.rlib"
 )
 
-# CI (clippy 1.75) に存在しない、新しすぎる lint。
+# CI の古い clippy に存在しない、新しすぎる lint。
 # ここで騒いでも CI では出ず、従うと MSRV を壊す。
 # `incompatible_msrv` を有効化。`manual_is_multiple_of` は逆に抑止する —
 # **その提案に従うと MSRV 違反になる**ため (両者は同じコードを指す)。
@@ -162,11 +163,11 @@ run_lint "bin tests" --test --crate-name rope_bin_lint --emit=metadata \
 echo
 if [ "$status" -eq 0 ]; then
     echo "✅ clippy 警告ゼロ + MSRV $conf_msrv 適合 (clippy $(clippy-driver --version | awk '{print $2}'))"
-    echo "   ⚠️  CI は clippy 1.75。バージョン差で結果が違いうる (冒頭の注意を参照)。"
+    echo "   ⚠️  CI の clippy は $declared_msrv 同梱版。バージョン差で結果が違いうる。"
     echo "       MSRV 検査は API の安定化バージョン表に基づくもので、"
-    echo "       1.75 で実際にビルドしたわけではない。"
+    echo "       $declared_msrv で実際にビルドしたわけではない。"
 else
     echo "❌ clippy に指摘あり — CI は -D warnings なので直すこと"
-    echo "   ただし**提案が MSRV 1.75 で使えない API かどうかを必ず確認**すること。"
+    echo "   ただし**提案が MSRV $declared_msrv で使えない API かどうかを必ず確認**すること。"
 fi
 exit "$status"
