@@ -6,7 +6,8 @@
 # 1. `check.sh` が **何も検出しないのに PASS する** (= 無害に見えて最悪の状態)
 #    に陥っていないこと。既知の 4 種類の型エラーを注入し、全て検出されること +
 #    元に戻したら PASS することを確認する。
-# 2. **shim 自身が正しいこと。** `hex`/`base64` は「本物と同じ符号化」、
+# 2. **MSRV 検査が効いていること** (1.87 の API を注入して検出させる)。
+# 3. **shim 自身が正しいこと。** `hex`/`base64` は「本物と同じ符号化」、
 #    `chrono` は「実 chrono と同じ RFC3339」と主張している。既知ベクタ
 #    (RFC 4648、既知の瞬間、一世紀分の日次往復) で裏を取る。
 #    ここが狂うと 358 件が「通っているのに間違っている」状態になる。
@@ -22,7 +23,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-cp -r "$ROOT/src" "$ROOT/tools" "$ROOT/Cargo.toml" "$TMP/"
+cp -r "$ROOT/src" "$ROOT/tools" "$ROOT/Cargo.toml" "$ROOT/clippy.toml" "$TMP/"
 CHECK="$TMP/tools/offline-typecheck/check.sh"
 TARGET="$TMP/src/core/intent.rs"
 PRISTINE="$TMP/intent.pristine"
@@ -88,6 +89,50 @@ old="pub fn format_plan(plan: &ExecutionPlan) -> String {\n    let mut out = Str
 assert old in s
 open(p,"w",encoding="utf-8").write(s.replace(old,old+"\n    let moved = out;\n    let _ = moved;",1))
 '
+
+# ------------------------------------------------------------------
+# MSRV 検査の検出力
+# ------------------------------------------------------------------
+#
+# `lint.sh` は「MSRV 1.75 適合」と言うが、**その lint が本当に効いているか**を
+# 確かめないと、ただ黙っているだけかもしれない。1.87 で安定化した API を
+# 注入して、検出されることを毎回実証する。
+
+echo
+echo "── MSRV 検査は本当に効いているか ──"
+
+cp "$PRISTINE" "$TARGET"
+cat >>"$TMP/src/core/mod.rs" <<'PROBE'
+
+/// selftest が注入する MSRV 検出プローブ (1.87 安定化 API)。
+pub fn _msrv_probe(a: u64, b: u64) -> bool {
+    a.is_multiple_of(b)
+}
+PROBE
+
+# ⚠️ `cmd | grep -q` と書いてはいけない。このスクリプトは `set -o pipefail` なので、
+# grep が一致しても **左側 (lint.sh) の非ゼロ終了でパイプライン全体が失敗扱い**に
+# なる。lint.sh は警告を見つけたら必ず 1 で終わるので、常に「見逃した」と誤報する。
+# 一度出力をファイルに落としてから grep する。
+msrv_log="$TMP/msrv-probe.log"
+ROPE_LINT_OUT="$TMP/lintout" ROPE_CLIPPY_CONF_DIR="$ROOT" \
+    "$TMP/tools/offline-typecheck/lint.sh" >"$msrv_log" 2>&1
+if grep -q "stable since" "$msrv_log"; then
+    echo "  ✅ 1.87 API を検出した"
+else
+    echo "  ❌ 1.87 API を見逃した — lint.sh の「MSRV 適合」は信用できない"
+    sed 's/^/     /' "$msrv_log" | head -10
+    failures=$((failures + 1))
+fi
+
+# プローブを取り除く
+python3 - "$TMP/src/core/mod.rs" <<'PY2'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+i = s.index("\n/// selftest が注入する MSRV 検出プローブ")
+open(p, "w", encoding="utf-8").write(s[:i] + "\n")
+PY2
 
 # ------------------------------------------------------------------
 # shim 自身のテスト

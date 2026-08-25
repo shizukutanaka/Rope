@@ -21,7 +21,7 @@
 # 1. rustfmt (構文と整形)
 # 2. オフライン型検査 — `src/` 全体を rustc に通す
 # 3. `src/` のテスト 358 件を**実際に実行** (core/ も含む)
-# 4. clippy (`clippy-driver` は registry 不要)
+# 4. clippy + **MSRV 1.75 適合検査** (`clippy-driver` は registry 不要)
 # 5. `cargo` が使えるなら本物のゲート (build/test/clippy/fmt)
 #
 # 1-4 は crates.io 不要。5 は使える環境でだけ走る。
@@ -62,7 +62,7 @@ echo "── 3/5 テストを実行 (src/ 全体) ──"
 }
 echo "  OK"
 
-echo "── 4/5 clippy ──"
+echo "── 4/5 clippy + MSRV 1.75 ──"
 ./tools/offline-typecheck/lint.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/lint.sh
     fail "clippy"
@@ -78,10 +78,11 @@ if cargo check --all-targets --offline >/dev/null 2>&1; then
     echo "  OK"
 else
     echo "  スキップ (crates.io に到達できません — docs/SURPLUS_AND_GAPS.md §0)"
-    echo "  ⚠️  型検査・テスト (既定 + --features http)・clippy は通りましたが"
-    echo "      **スタブ経由**です。MSRV 1.75 (toolchain を取得できない)・"
-    echo "      実 crate との挙動差・暗号的性質・実 mint との通信は未確認。"
-    echo "      clippy も CI の 1.75 とはバージョンが違います。"
+    echo "  ⚠️  型検査・テスト (既定 + --features http)・clippy・MSRV 1.75 は"
+    echo "      通りましたが**スタブ経由**です。実 crate との挙動差・"
+    echo "      暗号的性質・実 mint との通信は未確認。"
+    echo "      MSRV は API 安定化表による検査で、1.75 で実際にビルドしたわけでは"
+    echo "      ありません。clippy も CI の 1.75 とはバージョンが違います。"
 fi
 
 echo

@@ -90,10 +90,19 @@ real crates. Known differences that matter:
   than the default build). 🔴 `reqwest::send()` **always fails**: the stub does
   not touch the network, by behaviour rather than by type. **Real mint traffic
   is untested** — CI does not exercise it either.
-- Still invisible: **MSRV-1.75 compatibility itself** — measured 2026-08-18:
+- ✅ **MSRV 1.75 is now checked too** — and this one looked impossible.
   `static.rust-lang.org` is unreachable (`000`) and
-  `rustup toolchain install 1.75.0` fails, so the 1.75 toolchain cannot be
-  obtained here. Also `json!` contents and clap argument specs.
+  `rustup toolchain install 1.75.0` fails, so the 1.75 toolchain **cannot be
+  obtained here**. But the requirement was never "have the toolchain": it was
+  "know whether the code uses APIs newer than 1.75". **`clippy::incompatible_msrv`
+  answers that from a stabilisation table, with no toolchain at all.**
+  `clippy.toml` carries `msrv = "1.75.0"`; `lint.sh` refuses to run if it
+  disagrees with `Cargo.toml`'s `rust-version`, and `selftest.sh` injects a
+  1.87 API each run to prove the lint actually fires.
+  ⚠️ It checks *API stabilisation*, not "builds on 1.75" — syntax/borrow-checker
+  differences between 1.75 and 1.94 remain invisible.
+- Still invisible: `json!` contents, clap argument specs, real-crate behaviour,
+  anything cryptographic.
 
 **"The harness is green" ≠ "it compiles" ≠ "it works" ≠ "it is safe".**
 CI remains the shipping gate.

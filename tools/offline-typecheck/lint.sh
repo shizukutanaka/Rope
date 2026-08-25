@@ -26,6 +26,17 @@
 #
 # 既定では「新しすぎて CI に無い」lint を抑止する。全部見たい場合は
 # `ROPE_LINT_ALL=1` を付ける。
+#
+# ## ✅ MSRV 1.75 も**ここで検証できる**
+#
+# `rustup` は 1.75 toolchain を取得できない (static.rust-lang.org 到達不能) が、
+# **clippy の `incompatible_msrv` は toolchain を必要としない** — 各 API の
+# 安定化バージョンを内部表から引いて、`clippy.toml` の `msrv` と比べるだけ。
+# リポジトリ直下の `clippy.toml` に `msrv = "1.75.0"` を置いてある
+# (`Cargo.toml` の `rust-version` と一致させること)。
+#
+# これで「1.75 でコンパイルできるか」を、1.75 を持たずに検査できる。
+# `selftest.sh` が 1.87 の API を注入して**検出力を毎回実証する**。
 
 set -uo pipefail
 
@@ -45,7 +56,26 @@ ROPE_TYPECHECK_OUT="$SHIM" "$ROOT/tools/offline-typecheck/check.sh" >/dev/null 2
 
 CARGO_PKG_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
 CARGO_PKG_NAME="rope"
-export CARGO_PKG_VERSION CARGO_PKG_NAME
+# clippy.toml (msrv) の置き場所。cargo 経由でないので明示的に教える。
+CLIPPY_CONF_DIR="${ROPE_CLIPPY_CONF_DIR:-$ROOT}"
+export CARGO_PKG_VERSION CARGO_PKG_NAME CLIPPY_CONF_DIR
+
+# Cargo.toml の rust-version と clippy.toml の msrv がずれていたら、
+# MSRV 検査は嘘をつく。ここで一致を確かめる。
+declared_msrv="$(sed -n 's/^rust-version = "\([^"]*\)".*/\1/p' "$ROOT/Cargo.toml" | head -1)"
+conf_msrv="$(sed -n 's/^msrv = "\([^"]*\)".*/\1/p' "$CLIPPY_CONF_DIR/clippy.toml" 2>/dev/null | head -1)"
+if [ -z "$conf_msrv" ]; then
+    echo "❌ $CLIPPY_CONF_DIR/clippy.toml に msrv がありません — MSRV 検査が無効になります"
+    exit 1
+fi
+case "$conf_msrv" in
+    "$declared_msrv" | "$declared_msrv".*) ;;
+    *)
+        echo "❌ MSRV 不一致: Cargo.toml=$declared_msrv / clippy.toml=$conf_msrv"
+        exit 1
+        ;;
+esac
+echo "ℹ️  MSRV $conf_msrv を検査対象にします (toolchain は不要)"
 
 LIB_EXTERNS=(
     --extern serde="$SHIM/libserde.rlib"
@@ -67,7 +97,9 @@ LIB_EXTERNS=(
 
 # CI (clippy 1.75) に存在しない、新しすぎる lint。
 # ここで騒いでも CI では出ず、従うと MSRV を壊す。
-NEW_LINTS=(-A clippy::manual_is_multiple_of)
+# `incompatible_msrv` を有効化。`manual_is_multiple_of` は逆に抑止する —
+# **その提案に従うと MSRV 違反になる**ため (両者は同じコードを指す)。
+NEW_LINTS=(-W clippy::incompatible_msrv -A clippy::manual_is_multiple_of)
 if [ "${ROPE_LINT_ALL:-0}" = "1" ]; then
     NEW_LINTS=()
     echo "ℹ️  ROPE_LINT_ALL=1 — CI に無い新しい lint も表示します"
@@ -129,8 +161,10 @@ run_lint "bin tests" --test --crate-name rope_bin_lint --emit=metadata \
 
 echo
 if [ "$status" -eq 0 ]; then
-    echo "✅ clippy 警告ゼロ (この toolchain の clippy $(clippy-driver --version | awk '{print $2}'))"
+    echo "✅ clippy 警告ゼロ + MSRV $conf_msrv 適合 (clippy $(clippy-driver --version | awk '{print $2}'))"
     echo "   ⚠️  CI は clippy 1.75。バージョン差で結果が違いうる (冒頭の注意を参照)。"
+    echo "       MSRV 検査は API の安定化バージョン表に基づくもので、"
+    echo "       1.75 で実際にビルドしたわけではない。"
 else
     echo "❌ clippy に指摘あり — CI は -D warnings なので直すこと"
     echo "   ただし**提案が MSRV 1.75 で使えない API かどうかを必ず確認**すること。"

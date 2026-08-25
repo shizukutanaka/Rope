@@ -269,6 +269,27 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Added
 
+- **MSRV 1.75 適合をこの環境で検査できるようになった** — toolchain 無しで。
+  - 「1.75 の toolchain が取れないから検査できない」と書いていたが、
+    **要件は toolchain を持つことではなく「1.75 より新しい API を使って
+    いないか知ること」**だった。`clippy::incompatible_msrv` は API の
+    安定化バージョン表から答える — **toolchain を必要としない**
+  - `clippy.toml` に `msrv = "1.75.0"` を置いた。`lint.sh` は
+    `Cargo.toml` の `rust-version` と食い違っていたら**走る前に落ちる**
+    (ずれていたら検査が嘘をつくため)
+  - `selftest.sh` が毎回 **1.87 の API を注入して検出されることを実証**する。
+    「黙っているだけ」を防ぐ
+  - 結果: `src/` 全体 (既定 + `--features http`) で **MSRV 違反ゼロ**
+  - ⚠️ 検査するのは **API の安定化バージョンだけ**。1.75 と 1.94 の
+    構文・借用検査の差は見えない。「1.75 でビルドできる」の証明ではない
+  - 💡 副産物: `clippy::manual_is_multiple_of` の提案に従うと
+    `incompatible_msrv` が発火する — **同じコードを 2 つの lint が逆向きに
+    引っ張る**。`lint.sh` は前者を抑止して後者を有効にしている
+- `selftest.sh` の **`set -o pipefail` バグを修正** — `cmd | grep -q` は
+  grep が一致しても**左側の非ゼロ終了でパイプライン全体が失敗扱い**になる。
+  `lint.sh` は警告を見つけたら 1 で終わるので、MSRV 検出テストが
+  **常に「見逃した」と誤報**していた。出力をファイルに落としてから grep する
+
 - **`--features http` の経路も検査・lint・実行できるようになった** —
   `reqwest`/`tokio` をスタブ化 (`shims/reqwest.rs`, `shims/tokio.rs`)。
   - 測ったら `reqwest` の利用面は **9 メソッド + `Url::parse` だけ**、
