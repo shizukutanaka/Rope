@@ -58,6 +58,14 @@ while IFS= read -r hit; do
     rest="${hit#*:}"
     line="${rest%%:*}"
     text="${rest#*:}"
+    # **コード片 (バックティック) の中は例示なので飛ばす。** 文書は
+    # マーカーの書き方そのものを説明する必要があり、その例が実測値を
+    # 追いかける羽目になるのは本末転倒 (CHANGELOG は履歴なので特に)。
+    before="$(printf '%s' "$text" | sed 's/<!-- tests:.*//')"
+    ticks="$(printf '%s' "$before" | tr -cd '`' | wc -c)"
+    if [ $((ticks % 2)) -eq 1 ]; then
+        continue
+    fi
     key="$(printf '%s' "$text" | sed -n 's/.*<!-- tests:\([a-z]*\) -->.*/\1/p')"
     num="$(printf '%s' "$text" | sed 's/<!-- tests:[a-z]* -->.*//' | grep -o '[0-9]\+' | tail -1)"
 

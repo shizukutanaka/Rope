@@ -55,6 +55,41 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
   **ビルド不能環境でのマネーパス修正は CLAUDE.md §4 の運用規範に従い見送り**、
   コンパイラ検証可能な v0.3 での修正に委ねる
 
+### Added
+
+- **🔴 RoPE と grouped-query attention に数値の照合を足した**
+  (`SURPLUS_AND_GAPS.md` §1.25)。
+  ソクラテス問答「『手計算した値と一致する』— その手計算は独立か?
+  **では組み上がった Transformer が正しいことは示せているか?**」で発覚。
+  - **手計算は独立だった** (1.2 / 1.6 / [17,39] は実装を通さない定数)。
+    ここは疑って耐えた
+  - **しかし部品の話でしかなかった。** 数値で照合していたのは
+    `rmsnorm`/`matmul`/`softmax` の 3 つだけで、**RoPE・SwiGLU・GQA には
+    照合が 1 つも無かった**。`forward_with_zeroed_blocks` は attention と
+    FFN を丸ごと迂回し、`attention_actually_attends` は `a != b` しか見て
+    いない (回転を壊しても成り立つ)
+  - **RoPE は間違え方が 4 通りある** — 基数・指数の分母・sin/cos の向き・
+    ヘッドごとの添字リセット。どれも例外を出さず「それらしいが間違って
+    いる」生成文になる。最も見つけにくい壊れ方に検査が無かった
+  - **`kv_mul > 1` の経路はテストで 1 度も踏まれていなかった**
+    (`tiny_config` は `n_heads == n_kv_heads` だけ)。GQA の添字
+    `h / kv_mul` は書かれてから一度も検証されていなかった
+  - **この検査自体が早速効いた**: 4 件足した時点で、CLAUDE.md /
+    ASSESSMENT.md / SURPLUS_AND_GAPS.md / harness README の **10 箇所**が
+    黙って古くなり、`check-test-counts.sh` が push を止めた
+    (§1.23 が予言した壊れ方そのもの)
+  - 足した 4 件: `rope_rotates_by_the_hand_computed_angles` (素の三角関数の
+    定数と照合) / `rope_at_position_zero_changes_nothing` /
+    `rope_never_rotates_past_the_kv_region` /
+    `grouped_query_heads_share_one_kv_head`
+  - **検査が効くことを実装を壊して確かめた**: 上記 4 通りの誤りを実際に
+    注入し、**全て検出されることを実測**。新しいテストが「通った」だけでは
+    証明にならない (`selftest.sh` がハーネスに対してやっている手を、
+    製品のコアに対して行った)
+  - **残るもの**: SwiGLU には依然として数値の照合が無い (参照式を書き下すと
+    同じ式を 2 度書く形になり価値が薄く、壊れ方も RoPE ほど静かではない)。
+    llama2.c の実チェックポイントとの突き合わせも未 (モデル非同梱のため)
+
 ### Fixed
 
 - **🔴🔴 製品が自分について嘘の安全性を主張していた**

@@ -65,8 +65,8 @@
 2. **明快な状態機械** — `ecash`/`pair`/`confidential`/`intent` が型と状態遷移で表現され、
    I/O と分離した pure ロジックとして単体テスト可能。
 3. **厳格なローカル品質ゲート** — `clippy -D warnings`/`fmt --check`/`unsafe_code = deny`
-   を crate 全体に強制。テストは 305 件 <!-- tests:default --> (既定) /
-   **313 件** <!-- tests:http --> (`--features http`) — **概算ではなく実測値で、
+   を crate 全体に強制。テストは 309 件 <!-- tests:default --> (既定) /
+   **317 件** <!-- tests:http --> (`--features http`) — **概算ではなく実測値で、
    `tools/check-test-counts.sh` が push のたびにこの数字を検証する**
    (§1.23。以前ここは未実行の概算で、5 箇所が実際と食い違っていた)。
    **ただし CI 自体は未有効化** (§下記短所)。「ローカルで厳格」≠「自動化されている」。
@@ -158,7 +158,7 @@ W7 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashManag
    を検出し、**rustc 自身の警告も出る** (`unreachable_pattern` 等 — CI は
    `-D warnings` なので見ずに push すると落ちる)。`selftest.sh` が毎回それを実証する。
 
-   `run-tests.sh` は **`src/` のテスト 313 件 <!-- tests:http --> を実際に実行する**
+   `run-tests.sh` は **`src/` のテスト 317 件 <!-- tests:http --> を実際に実行する**
    (2026-08-18〜)。
    `core/` も走る — 長らく「core は走らない」と書いていたが**誤り**だった。
    **これで「コンパイラ無しでは検証できない」という制約は解けている。**

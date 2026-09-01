@@ -9,7 +9,7 @@
 
 ```sh
 tools/offline-typecheck/check.sh           # 型検査: src/ 全体 (約 2.5 秒)
-tools/offline-typecheck/run-tests.sh      # テスト 313 件 <!-- tests:http --> を**実際に実行**
+tools/offline-typecheck/run-tests.sh      # テスト 317 件 <!-- tests:http --> を**実際に実行**
 tools/offline-typecheck/lint.sh           # clippy + MSRV (registry 不要)
 tools/offline-typecheck/check-deps-msrv.sh # 依存の MSRV (index のみ使用)
 tools/offline-typecheck/selftest.sh       # ハーネス自体の健全性検証
@@ -26,10 +26,10 @@ tools/check-doc-anchors.sh                # 文書の file:line アンカー検�
 `lint.sh` は既定でその種の lint を抑止する (`ROPE_LINT_ALL=1` で全表示)。
 
 **`run-tests.sh` は型検査ではなく実行である。**
-**`src/` のテスト 313 件 <!-- tests:http --> すべてがこの環境で実際に走る**
-(2026-08-18〜)。内訳は 305 件 <!-- tests:default --> が既定 feature、
+**`src/` のテスト 317 件 <!-- tests:http --> すべてがこの環境で実際に走る**
+(2026-08-18〜)。内訳は 309 件 <!-- tests:default --> が既定 feature、
 残りが `--features http`。依存ゼロの `src/net/` だけを単独ビルドした
-62 件 <!-- tests:net --> は前者の部分集合である — **3 つを足してはいけない。**
+66 件 <!-- tests:net --> は前者の部分集合である — **3 つを足してはいけない。**
 
 これらの数字は `tools/check-test-counts.sh` が実測値と突き合わせる
 (`check-doc-anchors.sh` が file:line を守るのと同じ理屈)。

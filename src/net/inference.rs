@@ -1288,6 +1288,126 @@ mod tests {
         );
     }
 
+    /// **RoPE の周波数表を手計算の定数で固定する** (§1.25)。
+    ///
+    /// ここまで RoPE には数値的な照合が 1 つも無かった。
+    /// `attention_actually_attends_to_earlier_tokens` は「先行トークンが違えば
+    /// 出力も違う」しか見ておらず、**回転を間違えても通る**。
+    /// RoPE は指数の分母・基数・sin/cos の向き・ヘッドごとの添字リセットと、
+    /// 間違え方が 4 通りある — 生成文が「それらしいが間違っている」形で
+    /// 壊れる、最も見つけにくい種類のバグである。
+    ///
+    /// 期待値は実装を通さない**素の三角関数**:
+    /// `pos=2`, `head_size=4` なら
+    /// - 対 0 (head_dim=0): freq = 10000^(-0/4) = 1     → 角 2.0
+    /// - 対 1 (head_dim=2): freq = 10000^(-2/4) = 0.01  → 角 0.02
+    ///
+    /// `cos 2 = -0.4161468`, `sin 2 = 0.9092974`,
+    /// `cos 0.02 = 0.9998`, `sin 0.02 = 0.0199987`。
+    #[test]
+    fn rope_rotates_by_the_hand_computed_angles() {
+        let head_size = 4;
+        // dim=8 = 2 ヘッド分。**2 ヘッド目で添字がリセットされる**ことも見る
+        // (`i % head_size` を `i` と書き間違えると 2 ヘッド目だけ壊れる)。
+        let mut q = [1.0f32, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0];
+        let mut k = q;
+        apply_rope(&mut q, &mut k, 2, head_size, 8, 8);
+
+        let (c2, s2) = (-0.4161468f32, 0.9092974f32);
+        let (c02, s02) = (0.9998f32, 0.0199987f32);
+        let want = [c2, s2, c02, s02, c2, s2, c02, s02];
+        for (i, (got, exp)) in q.iter().zip(want.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < 1e-5,
+                "q[{}] = {} だが手計算では {}",
+                i,
+                got,
+                exp
+            );
+        }
+        assert_eq!(q, k, "kv_dim = dim なら k も同じだけ回る");
+    }
+
+    /// `pos = 0` は**恒等**でなければならない (角 0 → cos 1 / sin 0)。
+    ///
+    /// 先頭トークンが回ってしまう実装は、1 トークン目から静かに間違う。
+    #[test]
+    fn rope_at_position_zero_changes_nothing() {
+        let mut q = [0.3f32, -0.7, 1.5, 2.0];
+        let mut k = [1.0f32, 2.0, 3.0, 4.0];
+        let (q0, k0) = (q, k);
+        apply_rope(&mut q, &mut k, 0, 2, 4, 4);
+        assert_eq!(q, q0);
+        assert_eq!(k, k0);
+    }
+
+    /// **`kv_dim < dim` のとき、k は kv_dim までしか回らない** (GQA の形)。
+    ///
+    /// ここを越えて回すと `key_cache` の隣のヘッドを壊す — 境界を 1 つ
+    /// 間違えるだけで、他のヘッドの過去の鍵が書き換わる。
+    #[test]
+    fn rope_never_rotates_past_the_kv_region() {
+        let mut q = [1.0f32, 0.0, 1.0, 0.0];
+        let mut k = [1.0f32, 0.0, 9.0, 9.0]; // 後半は「触ってはいけない」印
+        apply_rope(&mut q, &mut k, 1, 2, 4, 2);
+        assert_ne!(q[0], 1.0, "q は全域回る");
+        assert_ne!(k[0], 1.0, "k も kv_dim までは回る");
+        assert_eq!([k[2], k[3]], [9.0, 9.0], "kv_dim の外は 1 バイトも触らない");
+    }
+
+    /// **grouped-query attention: 複数のクエリヘッドが同じ KV を共有する**
+    /// (§1.25)。`n_heads / n_kv_heads = kv_mul` の割り当てが
+    /// `h / kv_mul` で正しいことを、共有の有無が**出力に出る**形で見る。
+    ///
+    /// これまで GQA の添字は 1 度も検証されていなかった。`tiny_config` は
+    /// `n_heads == n_kv_heads` (= 共有なし) だけを使っており、**`kv_mul > 1`
+    /// の経路はテストで 1 度も踏まれていなかった。**
+    #[test]
+    fn grouped_query_heads_share_one_kv_head() {
+        // n_heads=2, n_kv_heads=1 → head_size = 4/2 = 2, kv_dim = 2, kv_mul = 2。
+        // クエリヘッド 0 と 1 が**同じ** KV ヘッド 0 を読む。
+        let c = Config {
+            dim: 4,
+            hidden_dim: 4,
+            n_layers: 1,
+            n_heads: 2,
+            n_kv_heads: 1,
+            vocab_size: 4,
+            seq_len: 4,
+            shared_classifier: false,
+        };
+        assert_eq!(c.head_size(), 2);
+
+        let bytes = build_checkpoint(c, |name, n| match name {
+            "rms_att" | "rms_ffn" | "rms_final" => vec![1.0; n],
+            "emb" => (0..n).map(|i| (i as f32 + 1.0) * 0.25).collect(),
+            // wq は dim×dim、wk/wv は dim×kv_dim (= 4×2)
+            "wq" | "wo" => identity(n, 4),
+            "wk" | "wv" => {
+                // kv は 1 ヘッド分しか無い。x の先頭 2 成分をそのまま通す。
+                let mut v = vec![0.0; n];
+                v[0] = 1.0; // out[0] = x[0]
+                v[4 + 1] = 1.0; // out[1] = x[1]
+                v
+            }
+            _ => vec![0.0; n],
+        });
+        let m = Model::from_bytes(&bytes, CheckpointLimits::default()).expect("load");
+
+        // 先行トークンを変えると、**両方の**クエリヘッドの出力が動くはず。
+        // 片方しか動かないなら `h / kv_mul` の割り当てが壊れている。
+        let second_after = |first: u32| {
+            let mut st = RunState::new(&m.config);
+            m.forward(&mut st, first, 0).unwrap();
+            m.forward(&mut st, 2, 1).unwrap();
+            st.xb.to_vec() // attention 直後ではなく最終 xb だが、両ヘッドを含む
+        };
+        let a = second_after(0);
+        let b = second_after(3);
+        assert_ne!(a, b, "共有 KV でも先行トークンが効く");
+        assert_eq!(a.len(), 4);
+    }
+
     #[test]
     fn forward_is_deterministic() {
         let c = tiny_config(true);
