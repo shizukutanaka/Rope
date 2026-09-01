@@ -223,6 +223,7 @@ W7 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashManag
 |---|---|
 | なぜその機能が要るのか (公理からの演繹) | [`docs/FIRST_PRINCIPLES_AUDIT.md`](docs/FIRST_PRINCIPLES_AUDIT.md) |
 | v1 の決定を支えた証拠 (論文・実測値) | [`docs/RESEARCH_UPDATE_2026-08.md`](docs/RESEARCH_UPDATE_2026-08.md) |
+| **今の長所・短所・改善点** (ソクラテス問答形式) | [`docs/ASSESSMENT.md`](docs/ASSESSMENT.md) |
 | 何が本物の暗号で、v1 が何を提供しないか | [`SECURITY.md`](SECURITY.md) |
 | モジュール構造・状態機械マップ | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 | どのコードが CLI から到達するか | [`docs/REACHABILITY_AUDIT.md`](docs/REACHABILITY_AUDIT.md) |
@@ -230,7 +231,7 @@ W7 等の「現状は実害ゼロだが将来バグ化」項目は、`EcashManag
 
 ### 📦 Tier 3 — 履歴 (v1 実装では開かなくてよい)
 
-`ASSESSMENT.md` (人間向け評価) / `RESEARCH_IMPROVEMENTS.md` (2026-06 バックログ) /
+`RESEARCH_IMPROVEMENTS.md` (2026-06 バックログ) /
 `RESEARCH_UPDATE_2026-07.md` (旧差分) / `CATEGORY_RESEARCH.md` (2026-06 調査) /
 `IMPROVEMENT_SYNTHESIS.md` (初期の統合案) / [`CHANGELOG.md`](CHANGELOG.md)
 
