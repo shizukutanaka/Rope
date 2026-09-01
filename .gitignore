@@ -22,3 +22,4 @@ Thumbs.db
 tools/offline-typecheck/.build/
 tools/offline-typecheck/.build-tests/
 tools/offline-typecheck/.build-lint/
+tools/e2e/.build/

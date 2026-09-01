@@ -46,35 +46,35 @@ fail() {
     exit 1
 }
 
-echo "── 1/7 rustfmt ──"
+echo "── 1/8 rustfmt ──"
 mapfile -t rs_files < <(git ls-files 'src/*.rs' 'src/**/*.rs' 'examples/*.rs' 2>/dev/null)
 if [ "${#rs_files[@]}" -gt 0 ]; then
     rustfmt --edition 2021 --check "${rs_files[@]}" || fail "rustfmt"
 fi
 echo "  OK"
 
-echo "── 2/7 オフライン型検査 ──"
+echo "── 2/8 オフライン型検査 ──"
 ./tools/offline-typecheck/check.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/check.sh
     fail "型検査"
 }
 echo "  OK"
 
-echo "── 3/7 テストを実行 (src/ 全体) ──"
+echo "── 3/8 テストを実行 (src/ 全体) ──"
 ./tools/offline-typecheck/run-tests.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/run-tests.sh
     fail "テスト"
 }
 echo "  OK"
 
-echo "── 4/7 clippy + MSRV $MSRV ──"
+echo "── 4/8 clippy + MSRV $MSRV ──"
 ./tools/offline-typecheck/lint.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/lint.sh
     fail "clippy"
 }
 echo "  OK"
 
-echo "── 5/7 依存グラフの MSRV (助言) ──"
+echo "── 5/8 依存グラフの MSRV (助言) ──"
 # **push をブロックしない。** 理由は 2 つ:
 #   1. index.crates.io への到達性に依存するので、ネットワーク事情で
 #      push が止まるのは筋が悪い
@@ -91,7 +91,7 @@ else
 fi
 rm -f /tmp/rope-deps-msrv.$$
 
-echo "── 6/7 文書の file:line アンカー ──"
+echo "── 6/8 文書の file:line アンカー ──"
 # 規範3 は「発見は file:line で記録する。将来の実装者が必ず参照する」と言うが、
 # **コードを直すたび行番号はずれる**。実測 (2026-08-18) で 84 件中 48 件が
 # 誤った場所を指していた。参照される前提の記録が 6 割間違っている状態は、
@@ -105,7 +105,28 @@ echo "── 6/7 文書の file:line アンカー ──"
 }
 echo "  OK"
 
-echo "── 7/7 cargo (使えれば) ──"
+echo "── 7/8 2 プロセス E2E ──"
+# 「相手のマシンで実行される」を**プロセス境界を越えて**確かめる。
+# transport のテストは 1 プロセス内の 2 スレッドなので、ここでしか出ない
+# 不具合がある (実例: 貸し手が 127.0.0.1 にだけ bind していると、mDNS が
+# 広告するのは送信元 IP なので接続が拒否される)。
+# ⚠️ マルチキャスト到達性に依存するので、届かなければスキップする。
+./tools/e2e/run.sh >/tmp/rope-e2e.$$ 2>&1
+e2e_status=$?
+if [ "$e2e_status" -eq 0 ]; then
+    if grep -q "⏭" /tmp/rope-e2e.$$; then
+        echo "  スキップ (マルチキャストが届かない — 通ったのではなく確かめられなかった)"
+    else
+        echo "  OK"
+    fi
+else
+    cat /tmp/rope-e2e.$$
+    rm -f /tmp/rope-e2e.$$
+    fail "2 プロセス E2E"
+fi
+rm -f /tmp/rope-e2e.$$
+
+echo "── 8/8 cargo (使えれば) ──"
 if cargo check --all-targets --offline >/dev/null 2>&1; then
     echo "  cargo が使えます。本物のゲートを回します。"
     cargo test --all-targets || fail "cargo test"
