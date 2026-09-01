@@ -28,8 +28,21 @@ use super::wire::{
     WireError, WireProof,
 };
 
-/// 接続・読み書きのタイムアウト (A9: 相手が黙り込んでも貸し手が固まらない)。
+/// 書き込みと、結果を待つ側の読み出しに使う上限
+/// (A9: 相手が黙り込んでも貸し手が固まらない)。
+///
+/// **これは「一番遅いフェーズ」の値である。** 推論の結果は大きくなりうるし、
+/// 借り手は貸し手が計算し終わるのを待たねばならない。
 pub const IO_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 握手 (`Hello`) と依頼 (`JobRequest`) を待つ時間。**本体よりずっと短くする。**
+///
+/// 正規の相手はこの 2 つをミリ秒で送る — 待つ理由は計算でも転送量でもなく、
+/// ネットワークの往復だけだからである。
+/// ここに `IO_TIMEOUT` を使っていた頃は、**接続して何も送らないだけで貸し手を
+/// 30 秒占有できた** (`serve_jobs` は直列なので、その間 誰にもサービスできない)。
+/// 攻撃コストはほぼゼロだった。
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 支払いを待つ時間。**本体より短くする。**
 ///
@@ -37,6 +50,67 @@ pub const IO_TIMEOUT: Duration = Duration::from_secs(30);
 /// 貸し手を 30 秒縛れる」だけの意味しか持たない (A9)。払わない相手は
 /// 早く切って次の接続を受ける方がよい。
 pub const PAYMENT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 同一ピアに 1 プロセスで許す実行回数の既定値 (A9)。
+///
+/// **粗い上限である。** 本来は消費した時間か計算量で測るべきだが、v1 の貸し手は
+/// 直列に 1 件ずつ処理するので、回数は占有時間の近似として使える。
+///
+/// 🔴 **Sybil には効かない** — 鍵を作り直せば回避できる。これは TOFU (A2) の
+/// 限界そのもので、Sybil 耐性は [`docs/V1_SCOPE.md`] が v1 から外した項目。
+/// ここで守れるのは「**1 つの鍵が貸し手の稼働時間を丸ごと食う**」ことだけ。
+pub const MAX_JOBS_PER_PEER: u32 = 64;
+
+/// 「この鍵は何回走らせたか」を数えるだけの器 (A9)。
+///
+/// **A2 (TOFU) は「誰か」を見るが「どれだけか」を見ていない。** 信頼した相手が
+/// 貸し手の稼働時間を丸ごと食えるなら、信頼判断は資源を守っていない。
+/// これはその隙間を埋める最小のもので、判断は [`JobPolicy::accept`] から呼ぶ。
+///
+/// プロセスが生きている間だけ数える (貸し出しは `max_minutes` で終わる)。
+/// 永続化しないのは意図的で、鍵ごとの履歴をディスクに増やす価値が
+/// この粗さに見合わないため。
+#[derive(Debug, Default)]
+pub struct PeerQuota {
+    limit: u32,
+    served: std::collections::HashMap<String, u32>,
+}
+
+impl PeerQuota {
+    /// 既定 ([`MAX_JOBS_PER_PEER`]) の上限で作る。
+    pub fn new() -> Self {
+        Self::with_limit(MAX_JOBS_PER_PEER)
+    }
+
+    /// 上限を指定して作る。`0` は「1 件も受けない」を意味する。
+    pub fn with_limit(limit: u32) -> Self {
+        Self {
+            limit,
+            served: std::collections::HashMap::new(),
+        }
+    }
+
+    /// 1 件分を計上する。上限を超えるなら**数えずに** `Err(理由)` を返す。
+    ///
+    /// 理由の文字列はそのまま `Reject` として借り手に届く — 何が起きたか
+    /// 分かるようにしておく (正直さの文化)。
+    pub fn charge(&mut self, peer_pubkey: &str) -> Result<(), String> {
+        let n = self.served.entry(peer_pubkey.to_string()).or_insert(0);
+        if *n >= self.limit {
+            return Err(format!(
+                "このピアの上限 {} 件に達しています (1 鍵あたり)",
+                self.limit
+            ));
+        }
+        *n += 1;
+        Ok(())
+    }
+
+    /// この鍵に対して既に走らせた件数。
+    pub fn served(&self, peer_pubkey: &str) -> u32 {
+        self.served.get(peer_pubkey).copied().unwrap_or(0)
+    }
+}
 
 #[derive(Debug)]
 pub enum TransportError {
@@ -167,6 +241,20 @@ pub struct ServedJob {
 /// 2. 自分の `Hello` を返す
 /// 3. `JobRequest` を受け取り、`policy.accept` に諮る
 /// 4. 通れば `policy.execute` して `JobResult`、駄目なら `Reject`
+///
+/// ## なぜタイムアウトが 3 つに分かれているか (A9)
+///
+/// [`HANDSHAKE_TIMEOUT`] (5 秒) が 1・3 を、[`IO_TIMEOUT`] (30 秒) が書き込みを、
+/// [`PAYMENT_TIMEOUT`] (5 秒) が支払い待ちを縛る。
+/// **1 つにまとめると、最も遅いフェーズに合わせた上限が最も速いフェーズの
+/// DoS 窓になる** — 実際、以前は全フェーズが 30 秒で、接続して何も送らないだけで
+/// 貸し手を 30 秒止められた (`serve_jobs` は直列)。
+///
+/// 🔴 **残る穴 (正直な開示)**: `set_read_timeout` は **read 1 回ごと**の上限で
+/// あって、フレーム全体の締切ではない。**4 秒おきに 1 バイトずつ送る相手は
+/// 依然として貸し手を縛れる** (slow-loris)。塞ぐには接続全体の締切を
+/// [`read_frame_bytes`] に通す必要があり、v1 では行っていない
+/// (`docs/SURPLUS_AND_GAPS.md` §1.21)。
 pub fn serve_connection(
     stream: &mut TcpStream,
     me: &NodeIdentity,
@@ -177,7 +265,9 @@ pub fn serve_connection(
     if !plaintext_allowed() {
         return Err(TransportError::PlaintextNotAllowed);
     }
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
+    // 読み出しの上限は**フェーズごとに違う** (A9)。ここは握手なので短い方を張る。
+    // 書き込みは結果が大きくなりうるので長い方のまま。
+    stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
 
     // 1. Hello (自己署名) — 鍵はメッセージの中にある
@@ -201,7 +291,9 @@ pub fn serve_connection(
         signer,
     )?;
 
-    // 3. 依頼。ここから先は相手の鍵で検証する
+    // 3. 依頼。ここから先は相手の鍵で検証する。
+    //    読み出しの上限は依然 `HANDSHAKE_TIMEOUT` — 依頼もまた即答すべきフェーズで、
+    //    ここで待つ理由は往復の遅延しか無い。
     let verifier = make_verifier(&peer_pubkey)
         .ok_or_else(|| TransportError::UntrustedPeer(peer_pubkey.clone()))?;
     let req = read_frame(stream, verifier.as_ref())?;
@@ -1119,5 +1211,87 @@ mod payment_tests {
             assert!(served.accepted, "計算はした");
             assert_eq!(served.paid_sats, 0, "対価は取れなかったと記録する");
         });
+    }
+}
+
+/// 貸し手の資源そのものを守れているか (A9) — 計算でも金銭でもなく、
+/// **時間**を食う攻撃に対する上限のテスト。
+#[cfg(test)]
+mod resource_tests {
+    use super::tests::*;
+    use super::*;
+    use std::net::{TcpListener, TcpStream};
+
+    /// **黙って繋ぐだけの借り手は、貸し手を長く縛れない** (A9)。
+    ///
+    /// 以前は握手にも `IO_TIMEOUT` (30 秒) を使っていたので、接続して何も
+    /// 送らないだけで貸し手を 30 秒占有できた。`serve_jobs` は直列なので、
+    /// これを繰り返すと貸し手は誰にもサービスできなくなる。
+    ///
+    /// 上限を `HANDSHAKE_TIMEOUT` (5 秒) にしたことを**実測で**確かめる。
+    /// 判定を 10 秒に置くのは、5 秒ちょうどを要求するとタイマの粒度や
+    /// 遅いマシンで揺れるため — ここで見たいのは「30 秒待たない」ことである。
+    #[test]
+    fn a_silent_borrower_cannot_hold_the_lender_for_thirty_seconds() {
+        with_plaintext(|| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                std::env::set_var("ROPE_ALLOW_PLAINTEXT", "1");
+                let (mut s, _) = listener.accept().unwrap();
+                let me = NodeIdentity {
+                    node_id: "lender".into(),
+                    pubkey: "0a".into(),
+                };
+                let policy = RealPolicy {
+                    engine: engine(),
+                    max_prompt: 4096,
+                };
+                let started = std::time::Instant::now();
+                let r = serve_connection(&mut s, &me, &FakeSig(0x0a), &tofu, &policy);
+                (r.is_err(), started.elapsed())
+            });
+
+            // 繋ぐだけ。1 バイトも送らず、切りもしない。
+            let _victim = TcpStream::connect(addr).unwrap();
+            let (errored, waited) = server.join().unwrap();
+
+            assert!(errored, "何も送らない相手はエラーとして切られる");
+            assert!(
+                waited < Duration::from_secs(10),
+                "握手の上限は HANDSHAKE_TIMEOUT ({:?}) の側であるべきだが {:?} 待った",
+                HANDSHAKE_TIMEOUT,
+                waited
+            );
+            // `_victim` はここで drop される
+        });
+    }
+
+    /// 同一の鍵が貸し手の稼働時間を丸ごと食えないこと (A9)。
+    ///
+    /// **鍵ごとに独立**であることも同時に見る — 1 人が使い切っても
+    /// 他のピアは影響を受けない。
+    #[test]
+    fn one_peer_cannot_consume_the_whole_lender() {
+        let mut q = PeerQuota::with_limit(2);
+        assert_eq!(q.served("0a"), 0);
+        assert!(q.charge("0a").is_ok(), "1 件目は通る");
+        assert!(q.charge("0a").is_ok(), "2 件目も通る");
+        assert_eq!(q.served("0a"), 2);
+
+        let refused = q.charge("0a").unwrap_err();
+        assert!(
+            refused.contains("上限"),
+            "理由が借り手に伝わる形になっている: {}",
+            refused
+        );
+        assert_eq!(q.served("0a"), 2, "拒否した分は数えない");
+
+        assert!(q.charge("0b").is_ok(), "別の鍵は独立に数える");
+        assert_eq!(q.served("0b"), 1);
+
+        // 上限 0 は「1 件も受けない」— 既定値を 0 にすれば貸出を止められる
+        let mut none = PeerQuota::with_limit(0);
+        assert!(none.charge("0a").is_err());
     }
 }

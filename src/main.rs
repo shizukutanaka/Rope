@@ -1015,6 +1015,9 @@ fn serve_jobs(max_minutes: u32, session: core::session::Session) -> Result<()> {
         /// 保持するのは 1 つだけ。別モデルを頼まれたら差し替える
         /// (複数常駐は貸し手のメモリを予測不能にする — A9)。
         engine: std::cell::RefCell<Option<(String, rope::net::inference::CpuEngine)>>,
+        /// 同一ピアの実行回数 (A9)。**TOFU は「誰か」しか見ていない** — 信頼した
+        /// 相手が稼働時間を丸ごと食えるなら、信頼判断は資源を守っていない。
+        quota: std::cell::RefCell<rope::net::transport::PeerQuota>,
     }
     impl JobPolicy for LocalPolicy {
         fn accept(
@@ -1043,6 +1046,9 @@ fn serve_jobs(max_minutes: u32, session: core::session::Session) -> Result<()> {
                     level
                 );
             }
+            // A9: **誰か**を通した後に**どれだけか**を見る。1 つの鍵が貸し手の
+            // 稼働時間を丸ごと食えないようにする (粗い上限。Sybil には効かない)。
+            self.quota.borrow_mut().charge(peer_pubkey)?;
             // モデル名は外から来る文字列 — パスにする前に必ず無害化する (A9)
             rope::net::inference::safe_model_stem(model).map_err(|e| e.to_string())?;
             if budget_sats == 0 {
@@ -1153,6 +1159,7 @@ fn serve_jobs(max_minutes: u32, session: core::session::Session) -> Result<()> {
         session: std::cell::RefCell::new(session),
         pair: std::cell::RefCell::new(core::pair::load_pair().unwrap_or_default()),
         engine: std::cell::RefCell::new(None),
+        quota: std::cell::RefCell::new(rope::net::transport::PeerQuota::new()),
     };
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(max_minutes as u64 * 60);

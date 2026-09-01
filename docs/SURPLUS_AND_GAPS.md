@@ -1035,6 +1035,71 @@ proof of the remainder.
   `reqwest::dns`'s exact API shape unverified (docs.rs is egress-blocked here)
   — confirm with `cargo doc` at implementation time.
 
+### 1.21 貸し手を止める一番安い方法は、どの門も通らなかった `[FIXED 2026-09-01]` (ソクラテス問答)
+
+> **問**: `ASSESSMENT.md` の長所 1.4 は「危険な経路は既定で閉じている」と言い、
+> 門を 2 つ挙げた (平文転送・実 mint)。**閉じるべき経路はそれで全部か?**
+> 貸し手を害する**最も安い**方法は何か?
+> **答**: **門を 1 つも通らずに貸し手を止められた。** 2 つ見つかった。
+> どちらも「攻撃」ではなく「普通の接続を、ただ普通に使わない」だけで成立する。
+
+**穴 1 — 黙って繋ぐだけで 30 秒占有できた**
+
+- `serve_connection` は接続の頭で `set_read_timeout(IO_TIMEOUT)` = **30 秒**を
+  張り、その上限のまま `Hello` と `JobRequest` を読んでいた
+  (`src/net/transport.rs:258` の関数、旧 `:180`)
+- 貸し手のループは**直列** (`src/main.rs:958` `serve_jobs` の doc が明言)
+- → 接続して 1 バイトも送らなければ、貸し手は 30 秒間 他の誰にも応じない。
+  繰り返せば `max_minutes` を丸ごと潰せる。**攻撃コストはほぼゼロ**
+
+**なぜ 30 秒だったのかを疑う (Musk ①)**: 30 秒が要るのは**実行と結果の
+書き出し**であって握手ではない。正規の `Hello`/`JobRequest` はミリ秒で届く
+— 待つ理由は往復遅延しか無い。**1 つのタイムアウトで足りる、という要件が
+間違っていた。** 1 本にまとめると、**最も遅いフェーズに合わせた上限が
+最も速いフェーズの DoS 窓になる。**
+
+→ `HANDSHAKE_TIMEOUT` = 5 秒を新設し、握手と依頼の読み出しに張った
+(`src/net/transport.rs:45`)。書き込みは `IO_TIMEOUT` のまま、支払い待ちは
+従来どおり `PAYMENT_TIMEOUT`。**フェーズごとに 3 本**になった。
+
+**穴 2 — 同一ピアの回数制限が無かった**
+
+`grep -c "rate_limit\|per_peer\|max_jobs\|cooldown" src/main.rs
+src/net/transport.rs` = **0 0**。
+A2 (TOFU) は「**誰か**」を見るが「**どれだけか**」を見ていない。
+信頼した相手が稼働時間を丸ごと食えるなら、その信頼判断は資源を守っていない。
+
+→ `PeerQuota` (`src/net/transport.rs:74`) を新設。`MAX_JOBS_PER_PEER` = 64。
+`LocalPolicy::accept` が信頼判断の直後・実行の前に `charge` を呼び、超過は
+既存の `Reject` 経路で借り手に理由ごと返る (`src/main.rs`)。
+
+**測って確かめた** (ハーネスで実行、`transport::resource_tests`):
+
+| テスト | 結果 |
+|---|---|
+| `a_silent_borrower_cannot_hold_the_lender_for_thirty_seconds` | **5.20 秒**で返る (旧: 30 秒) |
+| `one_peer_cannot_consume_the_whole_lender` | 上限で `Err`、拒否分は数えない、鍵ごとに独立 |
+
+**🔴 直っていないものを直ったと言わない (規範6)**
+
+- `set_read_timeout` は **read 1 回ごと**の上限であって、フレーム全体の
+  締切ではない。**4 秒おきに 1 バイトずつ送る相手は依然として貸し手を縛れる**
+  (slow-loris)。塞ぐには接続全体の締切を `read_frame_bytes`
+  (`src/net/wire.rs:483`) に通す必要があり、v1 では**やっていない**
+- `PeerQuota` は**鍵ごと**なので **Sybil には効かない** — 鍵を作り直せば
+  回避できる。これは TOFU の限界そのもので、Sybil 耐性は
+  [`V1_SCOPE.md`](V1_SCOPE.md) が v1 から外した項目
+- 回数は占有時間の**近似**でしかない。本来は消費した時間か計算量で測るべき。
+  v1 の貸し手が直列だから近似が成り立っているだけで、並行実行を入れたら
+  この上限は意味を失う
+
+**言えるのはここまで**: 最も安い攻撃の窓を 30 秒から 5 秒に縮め、
+同一鍵の総量に上限を付けた。**「DoS を直した」ではない。**
+
+なお**メモリ側は既に閉じていた** — `frame_len` が `MAX_PAYLOAD` を強制する
+(`src/net/wire.rs:396`)。残っていたのは時間の占有だけだった。
+
+
 ---
 
 ## 2. SURPLUS (過剰) — code/commitments beyond what's currently backed by use or roadmap
