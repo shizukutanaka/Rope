@@ -55,7 +55,7 @@
 | **A6** | 秘匿の技術的保証 | △ | ✗ | `perform_attestation` (`confidential.rs:460`) は動くが、`build_evidence_signature` (`confidential.rs:701`) が `unverified-digest:` prefix 付きの偽署名。Noise (`pair.rs:198` `NoisePattern`, `pair.rs:783` `begin_handshake`) は鍵交換なしの状態機械 |
 | **A7** | 中断耐性 (自動返金) | △ | ✗ | `deadman_at` (`ecash.rs:905`) + `refund_escrow` (`ecash.rs:905`) + `process_deadman` は実装済みだが未到達。さらに返金経路には既知の不整合あり (§1.8) |
 | **A9** | 貸し手の保護 (隔離・緊急停止・悪用防止) | △ | ✗ | `panic_stop` (`session.rs:399-419`) は `docker kill` による緊急停止機構として**存在するが CLI 未到達**。サンドボックス隔離 (gVisor/Firecracker) / URI フェッチの SSRF 対策 / CSAM モデレーションは**一切未実装** — A9 は「緊急停止の型」だけがある状態 (§4h) |
-| **A8** | ゼロコンフィグ | **○** | **✓** | `should_show_first_run` (`first_run.rs:729`) → `step_identity` (`first_run.rs:312`) で鍵生成まで自動。`rope` 一発で完走する |
+| **A8** | ゼロコンフィグ | **○** | **✓** | `should_show_first_run` (`first_run.rs:707`) → `step_identity` (`first_run.rs:312`) で鍵生成まで自動。`rope` 一発で完走する |
 
 ### 演繹された結論
 
@@ -307,11 +307,11 @@ README の 6 つの約束のうち、他の 5 つ (他人GPU・TEE プライバ�
 | `step_identity` (`first_run.rs:312`) | — (A8 固有) | **本物**。鍵生成・設定作成を質問ゼロで実行 |
 | `step_discovery_start` (`first_run.rs:326`) | A1 | stage 遷移のみ。探索 I/O なし |
 | `step_discovery_complete` (`first_run.rs:342`) | A1 | `pair.paired` を読んで VRAM 最大のピアを選ぶ (`first_run.rs:405-412`)。**発見ではなく既存状態の参照**。空ならローカルへフォールバック |
-| `step_attest` (`first_run.rs:405`) | A6 | ピア有無で TEE 種別を決める。コード自身が「**暫定: ピア有無で TEE 種別を決定 (実運用は Bob 側 GPU 種別を取得)**」と明記 (`first_run.rs:491-492`) |
-| `step_build_intent` (`first_run.rs:491`) | — | `Intent` を組み立てる。**本物** (型としては完全) |
-| `step_demo_completed` (`first_run.rs:523`) | **A3** | 引数で渡された文字列を保存するだけ (`first_run.rs:529`)。**推論は行わない** — 呼び出し元 (`main.rs`) が `sample_haiku_response()` の固定文を渡す |
-| `step_finale` (`first_run.rs:536`) | — | 完了画面の組み立て |
-| `step_done` (`first_run.rs:546`) | — | 終端遷移 |
+| `step_attest` (`first_run.rs:448`) | A6 | ピア有無で TEE 種別を決める。コード自身が「**暫定: ピア有無で TEE 種別を決定 (実運用は Bob 側 GPU 種別を取得)**」と明記 (`first_run.rs:448-449`) |
+| `step_build_intent` (`first_run.rs:448`) | — | `Intent` を組み立てる。**本物** (型としては完全) |
+| `step_demo_completed` (`first_run.rs:480`) | **A3** | 引数で渡された文字列を保存するだけ (`first_run.rs:493`)。**推論は行わない** — 呼び出し元 (`main.rs`) が `sample_haiku_response()` の固定文を渡す |
+| `step_finale` (`first_run.rs:493`) | — | 完了画面の組み立て |
+| `step_done` (`first_run.rs:503`) | — | 終端遷移 |
 
 ### 演繹される 2 つの事実
 

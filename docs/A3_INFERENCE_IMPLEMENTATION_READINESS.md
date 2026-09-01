@@ -66,7 +66,7 @@ let sampled = orch.first_run.sample_haiku_response().to_string();
 orch.step_demo_completed(&sampled)?;
 ```
 
-`step_demo_completed` (`first_run.rs:523`) は**渡された文字列を保存するだけ**。
+`step_demo_completed` (`first_run.rs:480`) は**渡された文字列を保存するだけ**。
 **`rope` 無引数デモの「推論」はここで完全にシミュレート**されている
 (README がその旨を明記済み)。
 

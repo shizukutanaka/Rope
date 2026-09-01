@@ -32,7 +32,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::confidential::{ConfidentialManager, SecurityLevel, TeeType};
+use super::confidential::ConfidentialManager;
 use super::ecash::EcashManager;
 use super::intent::{BudgetEnforcement, Intent, Privacy, Workload};
 use super::pair::{DiscoveryMethod, PairManager};
@@ -92,8 +92,15 @@ pub enum Stage {
     Discovering,
     /// ピア選択 (1 人でも見つかれば即進む)
     Paired,
-    /// LANDMINES 2 対応: Bob の GPU が TEE を持つことを attestation で確認
-    /// この stage が「他人の GPU でも prompt が見えない」を保証
+    /// **プロンプトの行き先を利用者に開示する段** (§1.24)。
+    ///
+    /// 🔴 **variant 名は嘘だが、意図的に残している。** 以前ここは
+    /// シミュレートした TEE attestation を走らせ、「GPU は安全 (プロンプトは
+    /// 相手に見えません)」と表示していた — `V1_SCOPE.md` が A6 (TEE 秘匿) を
+    /// v1 から削除し、`SECURITY.md` が「貸し手はプロンプトを見られる」と
+    /// 明記しているのに、である。**製品が自分について嘘の安全性を主張して
+    /// いた。** 中身は消したが、名前は `~/.rope/first_run.json` に既に
+    /// 書かれているので変えない (規範4: 既存ファイルの読込を壊さない)。
     AttestVerified,
     /// 既定デモジョブ作成 — ユーザーは何も入力しない
     DemoIntentCreated,
@@ -115,7 +122,8 @@ impl Stage {
             Stage::IdentityReady => "🔑",
             Stage::Discovering => "📡",
             Stage::Paired => "🤝",
-            Stage::AttestVerified => "🛡️",
+            // 盾ではない。**守っていないものを守っているように見せない。**
+            Stage::AttestVerified => "🔍",
             Stage::DemoIntentCreated => "💭",
             Stage::DemoCompleted => "✨",
             Stage::Finale => "🎬",
@@ -131,7 +139,7 @@ impl Stage {
             Stage::IdentityReady => "鍵の準備ができました。",
             Stage::Discovering => "近くのピアを探しています…",
             Stage::Paired => "接続しました。",
-            Stage::AttestVerified => "GPU は安全 (プロンプトは相手に見えません)",
+            Stage::AttestVerified => "プロンプトの行き先を確認しました。",
             Stage::DemoIntentCreated => "ジョブを組み立て中…",
             Stage::DemoCompleted => "動きました。",
             Stage::Finale => "3 つのうちどれを次にやりますか?",
@@ -394,94 +402,43 @@ impl<'a> FirstRunOrchestrator<'a> {
         Ok(outcome)
     }
 
-    /// Stage 4→5: TEE attestation 検証 (LANDMINES 2 対応)
+    /// Stage 4→5: **プロンプトの行き先を確かめて、利用者に開示する** (§1.24)。
     ///
-    /// Petals 死因 = 「Bob が prompt を見られる」。
-    /// Rope ではこれを GPU TEE (NVIDIA H100/H200/Blackwell, Intel TDX, AMD SEV-SNP)
-    /// で物理的に防ぐ。Bob の GPU が attestation を出せなければここで Aborted。
+    /// ## なぜ attestation を消したか (Musk ①→②)
     ///
-    /// **これが Rope の存在意義**。EXO は同所有者なので不要、Petals はやらず死亡、
-    /// Rope だけが他人 GPU + プロンプト秘匿を両立する。
-    pub fn step_attest(&mut self) -> Result<AttestVerdict> {
+    /// 以前ここは、ピアの GPU 名を文字列で見て TEE 種別を推定し、
+    /// シミュレートした attestation を走らせ、成功すれば
+    /// 「🛡️ GPU は安全 (プロンプトは相手に見えません)」と表示していた。
+    ///
+    /// **3 つとも間違っていた:**
+    ///
+    /// 1. **v1 に TEE 秘匿は無い。** `V1_SCOPE.md` §2 が A6 ごと削除し、
+    ///    `SECURITY.md` は「貸し手はプロンプトを見られる」と明記している。
+    ///    製品が自分について**嘘の安全性を主張していた** (規範6 の違反)
+    /// 2. **attestation は本物ではなかった。** `confidential.rs` の
+    ///    シミュレーションで、NRAS にも Intel Trust Authority にも触れない
+    /// 3. **民生 GPU で中止していた。** RTX 4090 のピアは「TEE 非対応」として
+    ///    `Aborted` になった — **v1 が狙っているのはまさにその層である。**
+    ///    初回体験が、想定利用者のハードウェアで止まっていた
+    ///
+    /// 今ここがするのは 1 つだけ: **プロンプトがどこへ行くかを判定して返す。**
+    /// 表示は呼び出し側 (`main.rs`) が posture に応じて行う。
+    /// 中止はしない — v1 の答えは「秘匿は無い、と伝えた上で走らせる」だから。
+    pub fn step_privacy_check(&mut self) -> Result<PrivacyPosture> {
         if self.first_run.current_stage != Stage::Paired {
             anyhow::bail!("不正な stage");
         }
 
-        // 暫定: ピア有無で TEE 種別を決定 (実運用は Bob 側 GPU 種別を取得)
-        let (tee_type, gpu_type, gpu_id) = if !self.pair.paired.is_empty() {
-            let p = &self.pair.paired[0];
-            let model_lower = p.capabilities.gpu_model.to_lowercase();
-            let tee = if model_lower.contains("h100")
-                || model_lower.contains("h200")
-                || model_lower.contains("b100")
-                || model_lower.contains("b200")
-            {
-                TeeType::NvidiaGpuTee
-            } else if model_lower.contains("intel") {
-                TeeType::IntelTdx
-            } else if model_lower.contains("amd") || model_lower.contains("epyc") {
-                TeeType::AmdSevSnp
-            } else {
-                // RTX 4090 など民生 GPU は TEE なし
-                self.first_run.transition(
-                    Stage::Aborted,
-                    &format!(
-                        "GPU '{}' は TEE 非対応。プロンプト秘匿不能のため中止。",
-                        p.capabilities.gpu_model
-                    ),
-                    false,
-                )?;
-                return Ok(AttestVerdict::TeeUnavailable {
-                    gpu_model: p.capabilities.gpu_model.clone(),
-                });
-            };
-            (tee, p.capabilities.gpu_model.clone(), p.id.clone())
-        } else {
-            // ローカルフォールバック: 自分のGPU、attestation不要
-            self.first_run.transition(
-                Stage::AttestVerified,
-                "Local-only execution; attestation skipped.",
-                true,
-            )?;
-            return Ok(AttestVerdict::SkippedForLocal);
+        let posture = match self.pair.paired.first() {
+            Some(p) => PrivacyPosture::PeerCanReadPrompt {
+                peer_gpu_model: p.capabilities.gpu_model.clone(),
+            },
+            None => PrivacyPosture::LocalOnly,
         };
 
-        // TEE インスタンス作成 → attestation 実行
-        let instance = self.confidential.create_tee_instance(
-            &gpu_id,
-            &gpu_type,
-            tee_type,
-            SecurityLevel::High,
-        );
-        let report = self.confidential.perform_attestation(&instance.id)?;
-
-        if !report.verification_result.success {
-            self.first_run.transition(
-                Stage::Aborted,
-                &format!(
-                    "Attestation 失敗: {}",
-                    report.verification_result.errors.join(", ")
-                ),
-                false,
-            )?;
-            return Ok(AttestVerdict::Failed {
-                errors: report.verification_result.errors,
-            });
-        }
-
-        self.first_run.transition(
-            Stage::AttestVerified,
-            &format!(
-                "{}  attestation OK ({})",
-                tee_type,
-                super::short(&report.id, 8)
-            ),
-            true,
-        )?;
-        Ok(AttestVerdict::Verified {
-            tee_type,
-            attestation_id: report.id,
-        })
+        self.first_run
+            .transition(Stage::AttestVerified, posture.detail(), true)?;
+        Ok(posture)
     }
 
     /// Stage 5→6: Intent 組立
@@ -490,7 +447,7 @@ impl<'a> FirstRunOrchestrator<'a> {
     /// 裏では demo_prompt と demo_model_name で Intent を作る。
     pub fn step_build_intent(&mut self) -> Result<Intent> {
         if self.first_run.current_stage != Stage::AttestVerified {
-            anyhow::bail!("不正な stage: TEE 未検証で Intent 構築不可");
+            anyhow::bail!("不正な stage: プライバシー開示前に Intent は組めない");
         }
 
         let cfg = &self.first_run.config;
@@ -572,21 +529,42 @@ pub enum DiscoveryOutcome {
     NoPeerAborted,
 }
 
-/// TEE attestation の結果 (LANDMINES 2 対応)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// **このデモのプロンプトが、実際にどこまで見えるか** (§1.24)。
+///
+/// v1 は秘匿を提供しない。だからこの型が答えるのは「安全か」ではなく
+/// **「誰が読めるか」**である。嘘をつかないための型。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AttestVerdict {
-    /// Attestation 成功、推論続行可能
-    Verified {
-        tee_type: TeeType,
-        attestation_id: String,
-    },
-    /// GPU が TEE 非対応 (RTX 4090 等民生品)
-    TeeUnavailable { gpu_model: String },
-    /// Attestation 自体は実行されたが失敗 (証拠不一致など)
-    Failed { errors: Vec<String> },
-    /// ローカル実行で attestation 不要
-    SkippedForLocal,
+pub enum PrivacyPosture {
+    /// この端末だけで走る。**プロンプトは外に出ない。**
+    LocalOnly,
+    /// ピアへ送る。**相手はプロンプトを平文で読める。**
+    PeerCanReadPrompt { peer_gpu_model: String },
+}
+
+impl PrivacyPosture {
+    /// 履歴に残す 1 行 (機械向け)。
+    pub fn detail(&self) -> &'static str {
+        match self {
+            PrivacyPosture::LocalOnly => "local-only: prompt does not leave this device",
+            PrivacyPosture::PeerCanReadPrompt { .. } => {
+                "peer execution: the lender can read the prompt (v1 has no confidentiality)"
+            }
+        }
+    }
+
+    /// 利用者に見せる 1 行。**ここで初めて本当のことを言う。**
+    pub fn user_line(&self) -> String {
+        match self {
+            PrivacyPosture::LocalOnly => {
+                "この端末だけで実行します — プロンプトは外に出ません。".to_string()
+            }
+            PrivacyPosture::PeerCanReadPrompt { peer_gpu_model } => format!(
+                "⚠️  相手 ({}) はプロンプトを読めます。v1 は秘匿を提供しません (SECURITY.md)。",
+                peer_gpu_model
+            ),
+        }
+    }
 }
 
 /// 終了画面で提示する 3 選択肢
@@ -808,9 +786,9 @@ mod tests {
         let disc = orch.step_discovery_complete().unwrap();
         assert!(matches!(disc, DiscoveryOutcome::PeerChosen { .. }));
 
-        // 新stage: TEE attestation
-        let verdict = orch.step_attest().unwrap();
-        assert!(matches!(verdict, AttestVerdict::Verified { .. }));
+        // 新stage: プロンプトの行き先を開示する
+        let posture = orch.step_privacy_check().unwrap();
+        assert!(matches!(posture, PrivacyPosture::PeerCanReadPrompt { .. }));
 
         let intent = orch.step_build_intent().unwrap();
         assert!(!intent.id.is_empty());
@@ -885,9 +863,11 @@ mod tests {
         assert!(orch.step_discovery_complete().is_err());
     }
 
-    /// LANDMINES 2 直接対応テスト: RTX 4090 (TEE 非対応) 時に確実に Aborted
+    /// **民生 GPU のピアでも中止しない** — v1 が狙うのはまさにその層だから
+    /// (§1.24)。以前はここで `Aborted` になっており、**想定利用者のハードウェアで
+    /// 初回体験が止まっていた。** 代わりに「相手は読める」と正直に伝える。
     #[test]
-    fn test_attest_rejects_non_tee_gpu() {
+    fn a_consumer_gpu_peer_is_not_aborted_but_disclosed() {
         let mut fr = FirstRun::new("alice");
         let mut pair = PairManager::default();
         let mut ecash = EcashManager::default();
@@ -927,15 +907,26 @@ mod tests {
         orch.step_identity().unwrap();
         orch.step_discovery_start().unwrap();
         orch.step_discovery_complete().unwrap();
-        let verdict = orch.step_attest().unwrap();
+        let posture = orch.step_privacy_check().unwrap();
 
-        assert!(matches!(verdict, AttestVerdict::TeeUnavailable { .. }));
-        assert_eq!(fr.current_stage, Stage::Aborted);
+        assert_eq!(
+            posture,
+            PrivacyPosture::PeerCanReadPrompt {
+                peer_gpu_model: "RTX 4090".to_string()
+            },
+            "民生 GPU でも中止しない"
+        );
+        assert_eq!(fr.current_stage, Stage::AttestVerified);
+        assert!(
+            posture.user_line().contains("読めます"),
+            "利用者に**読まれることを**伝える: {}",
+            posture.user_line()
+        );
     }
 
-    /// ローカルフォールバックは attestation 不要
+    /// ピアが居なければローカル実行 — **その時だけ「外に出ない」と言える**
     #[test]
-    fn test_attest_skipped_for_local() {
+    fn a_local_run_is_disclosed_as_staying_on_this_device() {
         let mut fr = FirstRun::new("alice");
         fr.config.fallback_to_local_if_no_peer = true;
         let mut pair = PairManager::default();
@@ -951,9 +942,14 @@ mod tests {
         orch.step_identity().unwrap();
         orch.step_discovery_start().unwrap();
         orch.step_discovery_complete().unwrap();
-        let verdict = orch.step_attest().unwrap();
-        assert!(matches!(verdict, AttestVerdict::SkippedForLocal));
+        let posture = orch.step_privacy_check().unwrap();
+        assert_eq!(posture, PrivacyPosture::LocalOnly);
         assert_eq!(fr.current_stage, Stage::AttestVerified);
+        assert!(
+            posture.user_line().contains("外に出ません"),
+            "ローカルなら**そう言える** — ここだけは本当に安全: {}",
+            posture.user_line()
+        );
     }
 
     #[test]
@@ -1065,7 +1061,7 @@ mod tests {
         orch.step_identity().unwrap();
         orch.step_discovery_start().unwrap();
         orch.step_discovery_complete().unwrap();
-        orch.step_attest().unwrap(); // local fallback → skipped
+        orch.step_privacy_check().unwrap(); // ピアなし → ローカルのみ
         let intent = orch.step_build_intent().unwrap();
         assert_eq!(intent.privacy, Privacy::ConfidentialCompute);
     }

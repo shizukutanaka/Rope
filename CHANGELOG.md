@@ -55,6 +55,39 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
   **ビルド不能環境でのマネーパス修正は CLAUDE.md §4 の運用規範に従い見送り**、
   コンパイラ検証可能な v0.3 での修正に委ねる
 
+### Fixed
+
+- **🔴🔴 製品が自分について嘘の安全性を主張していた**
+  (`SURPLUS_AND_GAPS.md` §1.24)。
+  **型検査 PASS + ハーネスでテスト実行 PASS。cargo は未検証。**
+  ソクラテス問答「README のデモにある `🛡️ GPU は安全 (プロンプトは相手に
+  見えません)` は**本当か?**」で発覚。
+  - **嘘だった。** README 自身が 20 行上で「v1 は秘匿を提供しない —
+    貸し手はプロンプトを見られる」と書いている。**同じ文書の中で正反対の
+    ことを言っていた。** しかも演出ではなく `first_run.rs` が実際に印字して
+    いた。セキュリティの主張なので、規範6 の違反として最も害が大きい
+  - **A6 削除の取りこぼしだった。** 初回体験の経路に TEE attestation が
+    まるごと残っており、しかも (a) 本物ではなく `confidential.rs` の
+    シミュレーション (b) **民生 GPU のピアで `Aborted`** していた —
+    v1 が狙うのはまさに RTX 4090 の層で、**想定利用者のハードウェアで
+    製品が自分から止まっていた**
+  - **さらに `rope run` の本経路にも同じ穴**: 既定は `--privacy tee-only`
+    なのに、`try_offload_to_peer` は `intent.privacy` を**一切見ずに**
+    プロンプトを平文で他人へ送っていた。`Intent::resolve` の feasibility
+    ガードは本物で正しく判定していたが、**実行経路がその計画を読んで
+    いなかった** — 計画と実行の食い違いは、片方が間違っているより悪い
+  - 直した: `step_attest` → `step_privacy_check` (シミュレート attestation を
+    削除、中止もしない)、`AttestVerdict` → `PrivacyPosture`
+    (`LocalOnly` / `PeerCanReadPrompt` — 「安全か」ではなく**「誰が読めるか」**
+    を答える型)、表示は posture 別の真実の 1 行、`rope run` は
+    `--privacy any` を明示しない限り他人へ送らない
+  - `Stage::AttestVerified` の **variant 名だけは残した** — 既存の
+    `~/.rope/first_run.json` に書かれているため (規範4)。理由は doc comment に
+  - テスト: `a_consumer_gpu_peer_is_not_aborted_but_disclosed` /
+    `a_local_run_is_disclosed_as_staying_on_this_device`
+  - **残るもの**: `--privacy tee-only` と `on-device` は v1 では同じ挙動
+    (どちらも「送らない」)。区別が意味を持つのは TEE が戻る v2 から
+
 ### Added
 
 - **🔴 `tools/check-test-counts.sh` — 文書が書いた「テスト N 件」を実測値と

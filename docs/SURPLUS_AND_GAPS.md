@@ -348,7 +348,7 @@ push をブロックする** (助言ではない — 決定的でネットワー
 **このツール自身が 2 度、誤った書き換えをしかけた。** どちらも直した:
 
 1. **全置換バグ**: 同じアンカー文字列が別のシンボルを指して複数箇所に現れる
-   (`first_run.rs:729` が `should_show_first_run` と `step_identity` の両方で
+   (`first_run.rs:707` が `should_show_first_run` と `step_identity` の両方で
    使われていた)。`str.replace` で全置換したため**正しい方を壊し**、
    検査が振動した。位置指定 (行 + 文字オフセット、後ろから適用) に変更。
 2. **方向バイアスのバグ**: 記法は `` `file.rs:1` `sym` `` と
@@ -1247,6 +1247,76 @@ A2 (TOFU) は「**誰か**」を見るが「**どれだけか**」を見てい�
 
 文書の散文の大半 — 設計判断の根拠、v2 の見積り、経済性の主張 — は
 **誰も検証していない**。`ASSESSMENT.md` §4 にこの区別を明記した。
+
+
+### 1.24 製品が自分について嘘の安全性を主張していた `[FIXED 2026-09-01]` (ソクラテス問答)
+
+> **問**: README の 60 秒デモに `🛡️ GPU は安全 (プロンプトは相手に見えません)`
+> という行がある。**これは本当か?**
+> **答**: **嘘である。** しかも README 自身が 20 行上で「v1 は『安全に』
+> (TEE 秘匿) を提供しない — **貸し手はプロンプトを見られる**」と書いている。
+> **同じ文書の中で正反対のことを言っていた。**
+
+そして演出ではなく、**コードが実際にそう印字していた**
+(`src/core/first_run.rs:134` の `human_message`)。
+
+#### これは 1 箇所の文言ミスではなく、A6 削除の取りこぼしだった
+
+`V1_SCOPE.md` §2 は A6 (TEE 秘匿) を v1 から削除し、`SECURITY.md` は
+「v1 は秘匿を提供しない」と明記している。しかし初回体験の経路には
+**A6 がまるごと残っていた**。3 つとも間違っていた:
+
+1. **v1 に TEE 秘匿は無い** のに「安全」と言っていた (規範6 の違反。しかも
+   セキュリティの主張なので、最も害の大きい種類)
+2. **attestation は本物ではなかった** — `confidential.rs` のシミュレーションで、
+   NRAS にも Intel Trust Authority にも触れない
+3. **民生 GPU のピアで `Aborted` していた** — GPU 名の文字列に `h100` 等が
+   無ければ「TEE 非対応」として初回体験を中止していた。
+   **v1 が狙っているのはまさに RTX 4090 の層である。**
+   想定利用者のハードウェアで、製品が自分から止まっていた
+
+#### さらに悪い方: `rope run` の本経路にも同じ穴があった
+
+`rope run` の既定は **`--privacy tee-only`** (= `Privacy::ConfidentialCompute`)
+である。ところが `try_offload_to_peer` は **`intent.privacy` を一切見ずに**
+プロンプトを平文で他人へ送っていた。
+
+- `Intent::resolve` の feasibility ガードは本物で、計画としては
+  「TEE 必須 + 検証なし → infeasible」と正しく判定する
+- **しかし実際に送る経路がその計画を読んでいなかった。**
+  計画と実行の食い違いは、どちらか片方が間違っているより悪い —
+  利用者は計画を見て安心し、実行は別のことをする
+
+#### 直した内容
+
+| 変更 | 場所 |
+|---|---|
+| `step_attest` → `step_privacy_check` に置換。**シミュレート attestation を削除**、中止もしない | `src/core/first_run.rs:397` |
+| `AttestVerdict` → `PrivacyPosture` (`LocalOnly` / `PeerCanReadPrompt`)。**「安全か」ではなく「誰が読めるか」を答える型** | `src/core/first_run.rs:557` |
+| 表示を `🛡️ GPU は安全…` → `🔍 プロンプトの行き先を確認しました。` + posture 別の真実の 1 行 | `first_run.rs` / `src/main.rs` |
+| `rope run` が **`--privacy` を実際に守る** — `any` 以外なら他人に送らず、理由を表示 | `src/main.rs` |
+| README のデモ写しと TEE の節を実態に合わせた | `README.md` |
+
+`Stage::AttestVerified` という **variant 名だけは残した** — 既存の
+`~/.rope/first_run.json` に書かれているため (規範4)。名前が実態と違う理由は
+doc comment に書いた。
+
+**テスト** (ハーネスで実行):
+
+- `a_consumer_gpu_peer_is_not_aborted_but_disclosed` — RTX 4090 のピアでも
+  中止せず、「相手は**読めます**」と伝えること
+- `a_local_run_is_disclosed_as_staying_on_this_device` — ローカルなら
+  「外に出ません」と言えること (**ここだけは本当に安全**)
+
+#### 残っているもの
+
+- `core/confidential.rs` は残してある。v1 の経路からは呼ばれなくなったが、
+  A6 を戻す v2 の資産であり、`REACHABILITY_AUDIT.md` に記録済みの surplus
+- 既定が `tee-only` なので、**他人に頼むには `--privacy any` の明示が要る**。
+  製品の看板機能に一手増えるが、暗号化されていない経路へ既定で
+  プロンプトを送る方が誤りだと判断した
+- `Privacy::OnDeviceOnly` と `ConfidentialCompute` は v1 では**同じ挙動**に
+  なる (どちらも「送らない」)。区別が意味を持つのは TEE が戻る v2 から
 
 
 ---

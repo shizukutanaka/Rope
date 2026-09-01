@@ -209,16 +209,13 @@ fn run_first_run() -> Result<()> {
         return Ok(());
     }
 
-    let _verdict = orch.step_attest()?;
+    // **プロンプトがどこへ行くかを、走らせる前に言う** (§1.24)。
+    // 以前ここは「🛡️ GPU は安全 (プロンプトは相手に見えません)」と表示して
+    // いた — v1 が秘匿を提供しないと `SECURITY.md` に書いてあるのに、である。
+    // この段は中止しない (民生 GPU で止めない) ので Aborted 判定も要らない。
+    let posture = orch.step_privacy_check()?;
     println!("{}", orch.first_run.progress_line());
-
-    if orch.first_run.current_stage == Stage::Aborted {
-        if let Some(reason) = &orch.first_run.abort_reason {
-            println!("  理由: {}", reason);
-        }
-        save_first_run(orch.first_run)?;
-        return Ok(());
-    }
+    println!("   {}", posture.user_line());
 
     let _intent = orch.step_build_intent()?;
     println!("{}", orch.first_run.progress_line());
@@ -518,7 +515,8 @@ fn run_inference(
     println!("💭 Intent 構築済 ({})", core::short(&intent.id, 8));
     println!("  モデル: {}", model);
     println!("  プロンプト: {}", truncate_str(prompt, 60));
-    println!("  プライバシー: {}", intent.privacy);
+    let intent_privacy_label = intent.privacy.to_string();
+    println!("  プライバシー: {}", intent_privacy_label);
     println!("  検証レベル: {}", intent.verification);
     println!("  予算: {} sats", budget_sats);
     println!();
@@ -548,7 +546,21 @@ fn run_inference(
 
     // A1+A3: **まず他人に頼む** — それがこの製品の存在理由。
     // 頼めなければローカルで走らせ、どちらだったかを必ず表示する。
-    if let Some(c) = try_offload_to_peer(model, prompt, budget_sats)? {
+    //
+    // 🔴 **ただし `--privacy` を実際に守る** (§1.24)。既定は `tee-only` で、
+    // v1 に TEE は無い。以前ここは privacy を**一切見ずに**プロンプトを
+    // 平文で他人へ送っていた — 利用者が「TEE 必須」と指定しているのに、である。
+    // `intent.privacy` は resolver の計画には効いていたが、**実際に送る経路は
+    // それを読んでいなかった**。計画と実行が食い違うのは最悪の形の嘘になる。
+    if privacy != Privacy::AnyCompute {
+        println!(
+            "  🔒 プライバシー指定 ({}) のため他人には送りません。",
+            intent_privacy_label
+        );
+        println!("     v1 の転送は暗号化されていないので、相手はプロンプトを読めます。");
+        println!("     他人に頼むには `--privacy any` を明示してください (SECURITY.md)。");
+        println!();
+    } else if let Some(c) = try_offload_to_peer(model, prompt, budget_sats)? {
         println!("{}", c.text);
         println!();
         println!(

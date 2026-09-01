@@ -9,7 +9,10 @@ EXO は同じ所有者のデバイス向け。Rope は他人のデバイス向�
 >   **CPU で**実行する — 固定文字列を返すプレースホルダではない。
 > - ✅ **「他人の」も本物になった** (2026-08-18)。同じ LAN の Rope を mDNS で見つけ、
 >   TCP でジョブを送り、**相手のマシンで実行された結果が返る**。
->   `rope run` はまず他人に頼み、駄目な時だけローカルへ落ちる。
+>   `rope run --privacy any` はまず他人に頼み、駄目な時だけローカルへ落ちる。
+>   **既定 (`--privacy tee-only`) では他人に送らない** — v1 に TEE は無く、
+>   転送も暗号化されていないので、既定で他人へ平文を送るのは誤りだった
+>   (`docs/SURPLUS_AND_GAPS.md` §1.24)。
 > - ✅ **トークン不要の支払いも渡る** — 結果を受け取ってから bearer token を送り、
 >   貸し手のウォレットに入る。
 > - 🔴 **ただし決済の中身はまだ本物ではない。** BDHKE がプレースホルダなので、
@@ -35,7 +38,8 @@ $ rope
 🔑 鍵の準備ができました。
 📡 近くのピアを探しています…
 🤝 接続しました。
-🛡️  GPU は安全 (プロンプトは相手に見えません)
+🔍 プロンプトの行き先を確認しました。
+   この端末だけで実行します — プロンプトは外に出ません。
 💭 ジョブを組み立て中…
 ✨ 動きました。
 
@@ -64,6 +68,11 @@ My thanks ride on light.
 >   `ROPE_ALLOW_PLAINTEXT=1` の明示が要る ([`SECURITY.md`](SECURITY.md))。
 > - **🔴 支払いのトークンはまだ本物ではない。** BDHKE がプレースホルダなので
 >   実際の Cashu mint では通らない。
+> - **🔍 の行は、走らせる前に本当のことを言う。** ピアに送るなら
+>   「⚠️ 相手はプロンプトを読めます。v1 は秘匿を提供しません」と出る。
+>   以前ここは「🛡️ GPU は安全 (プロンプトは相手に見えません)」と表示して
+>   いた — **`SECURITY.md` が真逆を書いているのに、である**
+>   (`docs/SURPLUS_AND_GAPS.md` §1.24 で修正)。
 > - **GPU ではなく CPU** で走る。
 >
 > 詳細と理由: [`docs/ASSESSMENT.md`](docs/ASSESSMENT.md) /
@@ -161,12 +170,15 @@ Render/Dispersed.com・Aethir・Fluence・Nosana・iExec・Argentum AI 等が存
 見つからなかった**ため、「独自トークン不要」は現時点でも**実質的な差別化**として
 成立している。詳細: [`docs/RESEARCH_UPDATE_2026-08.md`](docs/RESEARCH_UPDATE_2026-08.md) §4k。
 
-> **TEE プライバシーの前提**: 「プロンプトは相手に見えません」が成立するのは
-> **attestation 検証済みの TEE 対応 GPU (NVIDIA Hopper/Blackwell 以降)** に限ります。
-> CC 非対応の消費者 GPU に機微ジョブを送ると平文が露出するため、
-> `Privacy::ConfidentialCompute` の intent は **Attested 検証を必須**とし、
-> 検証なし/非 TEE ピアへのルーティングは resolver が拒否します
-> (`core::intent` の feasibility ガード)。詳細: [`docs/RESEARCH_IMPROVEMENTS.md`](docs/RESEARCH_IMPROVEMENTS.md) #2。
+> **TEE プライバシーについて (v1 の実態)**: **v1 は TEE 秘匿を提供しません。**
+> `V1_SCOPE.md` §2 が A6 ごと削除しました。`core::intent` の feasibility
+> ガード (`Privacy::ConfidentialCompute` には Attested 検証が必須、検証なし/
+> 非 TEE ピアへのルーティングは拒否) は**状態機械としては本物**ですが、
+> v1 に実 attestation は無いので、この指定は実際には
+> **「他人に送らない」として効きます** — `rope run` は `--privacy any` を
+> 明示しない限り他人へ送りません (§1.24)。
+> TEE の再導入は v2。詳細: [`SECURITY.md`](SECURITY.md) /
+> [`docs/RESEARCH_IMPROVEMENTS.md`](docs/RESEARCH_IMPROVEMENTS.md) #2。
 
 ---
 
