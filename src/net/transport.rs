@@ -975,6 +975,100 @@ mod payment_tests {
         });
     }
 
+    /// **貸し手は同じモデルを 2 度読み込まない。**
+    ///
+    /// ソクラテス問答で見つけた実バグの回帰テスト:
+    /// 「2 件目のジョブが来たとき、モデルはどこから来るのか?」に対し、
+    /// 実装は**毎回ディスクから読み直していた**。7B 級なら 1 リクエストごとに
+    /// 数十 GB の再読み込みで、A9 (貸し手の資源保護) に反する。
+    /// テストが 1 接続しか張っていなかったので長く気づかなかった。
+    ///
+    /// ここでは `JobPolicy` にロード回数を数えさせ、**2 件連続で処理しても
+    /// ロードは 1 回**であることを固定する。
+    #[test]
+    fn a_lender_loads_the_same_model_only_once_across_jobs() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        struct CountingPolicy {
+            inner: RealPolicy,
+            loaded: AtomicU32,
+            current: std::cell::RefCell<Option<String>>,
+        }
+        impl JobPolicy for CountingPolicy {
+            fn accept(&self, pk: &str, j: &str, m: &str, p: &str, b: u64) -> Result<(), String> {
+                self.inner.accept(pk, j, m, p, b)
+            }
+            fn execute(&self, m: &str, p: &str, n: u32) -> Result<Executed, String> {
+                // 本番の `LocalPolicy::execute` と同じ判断:
+                // 「保持しているモデルと違うときだけ読む」
+                let mut cur = self.current.borrow_mut();
+                if cur.as_deref() != Some(m) {
+                    self.loaded.fetch_add(1, Ordering::SeqCst);
+                    *cur = Some(m.to_string());
+                }
+                drop(cur);
+                self.inner.execute(m, p, n)
+            }
+        }
+
+        with_plaintext(|| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            let server = std::thread::spawn(move || {
+                std::env::set_var("ROPE_ALLOW_PLAINTEXT", "1");
+                let policy = CountingPolicy {
+                    inner: RealPolicy {
+                        engine: engine(),
+                        max_prompt: 4096,
+                    },
+                    loaded: AtomicU32::new(0),
+                    current: std::cell::RefCell::new(None),
+                };
+                let me = NodeIdentity {
+                    node_id: "lender".into(),
+                    pubkey: "0a".into(),
+                };
+                // **2 接続を直列に処理する** (本番の serve ループと同じ形)
+                for _ in 0..2 {
+                    let (mut s, _) = listener.accept().unwrap();
+                    serve_connection(&mut s, &me, &FakeSig(0x0a), &tofu, &policy).unwrap();
+                }
+                policy.loaded.load(Ordering::SeqCst)
+            });
+
+            for i in 0..2 {
+                let mut c = TcpStream::connect(addr).unwrap();
+                let me = NodeIdentity {
+                    node_id: "borrower".into(),
+                    pubkey: "0b".into(),
+                };
+                let (out, _) = request_job(
+                    &mut c,
+                    &me,
+                    &FakeSig(0x0b),
+                    &tofu,
+                    None,
+                    &format!("job-{i}"),
+                    "demo",
+                    "ab",
+                    4,
+                    100,
+                    &mut |_| vec![],
+                )
+                .unwrap();
+                assert_eq!(out.text, "bbbb", "{i} 件目も計算される");
+                drop(c);
+            }
+
+            let loads = server.join().unwrap();
+            assert_eq!(
+                loads, 1,
+                "同じモデルの 2 ジョブでロードは 1 回であるべき (実際 {loads} 回)"
+            );
+        });
+    }
+
     /// 払わない借り手でも、貸し手は落ちずに `paid_sats = 0` として記録する。
     #[test]
     fn an_unpaid_job_is_recorded_not_fatal() {

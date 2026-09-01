@@ -827,6 +827,28 @@ fn model_dir() -> std::path::PathBuf {
     }
 }
 
+/// モデル名からエンジンをロードする。**モデルが無ければ `Ok(None)`** —
+/// 失敗ではなく「まだ無い」。
+///
+/// 貸し手 (`LocalPolicy`) はこれを 1 度だけ呼んで結果を保持する。
+/// 借り手の単発実行 (`run_local_inference_limited`) は毎回呼ぶが、
+/// そちらはプロセスが 1 回走って終わるので読み直しは起きない。
+fn load_engine(model: &str) -> Result<Option<rope::net::inference::CpuEngine>> {
+    use rope::net::inference::{safe_model_stem, CheckpointLimits, CpuEngine};
+
+    // モデル名は外から来た文字列として扱う (パス結合の前に必ず無害化する)
+    let stem = safe_model_stem(model).map_err(|e| anyhow::anyhow!("{}", e))?;
+    let dir = model_dir();
+    let model_path = dir.join(format!("{}.bin", stem));
+    let tokenizer_path = dir.join("tokenizer.bin");
+    if !model_path.exists() || !tokenizer_path.exists() {
+        return Ok(None);
+    }
+    let engine = CpuEngine::load(&model_path, &tokenizer_path, CheckpointLimits::default())
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    Ok(Some(engine))
+}
+
 /// ローカルモデルで推論を実行する。
 ///
 /// モデルが配置されていなければ `Ok(None)` — **失敗ではなく「まだ無い」**。
@@ -847,22 +869,13 @@ fn run_local_inference_limited(
     prompt: &str,
     max_output_tokens: u32,
 ) -> Result<Option<rope::net::inference::Completion>> {
-    use rope::net::inference::{
-        safe_model_stem, CheckpointLimits, CpuEngine, ExecutionLimits, InferenceEngine, Sampler,
+    use rope::net::inference::{ExecutionLimits, InferenceEngine, Sampler};
+
+    let engine = match load_engine(model)? {
+        Some(e) => e,
+        None => return Ok(None),
     };
-
-    // モデル名は外から来た文字列として扱う (パス結合の前に必ず無害化する)
-    let stem = safe_model_stem(model).map_err(|e| anyhow::anyhow!("{}", e))?;
-    let dir = model_dir();
-    let model_path = dir.join(format!("{}.bin", stem));
-    let tokenizer_path = dir.join("tokenizer.bin");
-    if !model_path.exists() || !tokenizer_path.exists() {
-        return Ok(None);
-    }
-
-    println!("🧮 ローカル推論を実行中 ({})…", model_path.display());
-    let engine = CpuEngine::load(&model_path, &tokenizer_path, CheckpointLimits::default())
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    println!("🧮 ローカル推論を実行中 ({})…", model);
     let limits = ExecutionLimits {
         max_prompt_tokens: 2048,
         max_output_tokens,
@@ -991,6 +1004,17 @@ fn serve_jobs(max_minutes: u32, session: core::session::Session) -> Result<()> {
         session: std::cell::RefCell<core::session::Session>,
         /// TOFU の信頼ストア。**誰の計算を受けるかをここで決める** (A2)。
         pair: std::cell::RefCell<core::pair::PairManager>,
+        /// ロード済みモデル (モデル名, エンジン)。**ジョブごとに読み直さない。**
+        ///
+        /// 以前は `execute` が毎回 `CpuEngine::load` を呼んでいた。7B 級なら
+        /// 1 リクエストごとに数十 GB をディスクから読み直すことになり、
+        /// **A9 (貸し手の資源保護) に反し**、`V1_SCOPE.md` の「60 秒」が前提と
+        /// する「ウォームな貸し手」も成立しない。テストが 1 接続しか張って
+        /// いなかったので長く気づかなかった。
+        ///
+        /// 保持するのは 1 つだけ。別モデルを頼まれたら差し替える
+        /// (複数常駐は貸し手のメモリを予測不能にする — A9)。
+        engine: std::cell::RefCell<Option<(String, rope::net::inference::CpuEngine)>>,
     }
     impl JobPolicy for LocalPolicy {
         fn accept(
@@ -1084,18 +1108,42 @@ fn serve_jobs(max_minutes: u32, session: core::session::Session) -> Result<()> {
             prompt: &str,
             max_output_tokens: u32,
         ) -> Result<Executed, String> {
+            use rope::net::inference::{ExecutionLimits, InferenceEngine, Sampler};
+
             // 相手の希望値をそのまま信じず、自分の上限で頭打ちにする (A9)
             let capped = max_output_tokens.min(self.max_output_tokens);
-            match run_local_inference_limited(model, prompt, capped) {
-                Ok(Some(c)) => Ok(Executed {
-                    text: c.text,
-                    prompt_tokens: c.prompt_tokens,
-                    output_tokens: c.output_tokens,
-                    forward_passes: c.forward_passes,
-                }),
-                Ok(None) => Err(format!("モデル {} を持っていません", model)),
-                Err(e) => Err(e.to_string()),
+
+            // **ロード済みなら読み直さない。** 別モデルなら差し替える。
+            {
+                let mut slot = self.engine.borrow_mut();
+                let need_load = !matches!(slot.as_ref(), Some((name, _)) if name == model);
+                if need_load {
+                    match load_engine(model) {
+                        Ok(Some(e)) => {
+                            println!("   📦 モデル {} をロード", model);
+                            *slot = Some((model.to_string(), e));
+                        }
+                        Ok(None) => return Err(format!("モデル {} を持っていません", model)),
+                        Err(e) => return Err(e.to_string()),
+                    }
+                }
             }
+
+            let slot = self.engine.borrow();
+            let (_, engine) = slot.as_ref().expect("直前にロード済み");
+            let limits = ExecutionLimits {
+                max_prompt_tokens: 2048,
+                max_output_tokens: capped,
+            };
+            let c = engine
+                .generate(prompt, limits, Sampler::default(), 0x526F7065)
+                .map_err(|e| e.to_string())?;
+            Ok(Executed {
+                text: c.text,
+                prompt_tokens: c.prompt_tokens,
+                output_tokens: c.output_tokens,
+                forward_passes: c.forward_passes,
+            })
         }
     }
 
@@ -1104,6 +1152,7 @@ fn serve_jobs(max_minutes: u32, session: core::session::Session) -> Result<()> {
         earned: std::cell::RefCell::new(core::ecash::load_ecash().unwrap_or_default()),
         session: std::cell::RefCell::new(session),
         pair: std::cell::RefCell::new(core::pair::load_pair().unwrap_or_default()),
+        engine: std::cell::RefCell::new(None),
     };
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(max_minutes as u64 * 60);
