@@ -57,10 +57,27 @@ fi
     exit 1
 }
 
+: > "$OUT/counts.txt"
+
+# 実行して結果を表示しつつ、件数を `$OUT/counts.txt` に記録する。
+#
+# **なぜ件数を書き出すか**: 文書 (CLAUDE.md 等) が「テスト N 件」と書いており、
+# それが実際の数と食い違ったまま古びていた (§1.23)。
+# `tools/check-test-counts.sh` がここで書いた実測値と文書を突き合わせる。
+run_suite() {
+    local key="$1" bin="$2" out rc
+    out="$("$bin" --test-threads=1 2>&1)"
+    rc=$?
+    echo "$out"
+    echo "$key $(printf '%s' "$out" | sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' | head -1)" \
+        >> "$OUT/counts.txt"
+    return $rc
+}
+
 echo
 echo "── 実行 (依存ゼロモジュール) ──"
 # --test-threads=1: 実ソケットを使うテストがポートとカレント環境変数を触るため
-"$OUT/tests" --test-threads=1
+run_suite net "$OUT/tests"
 status=$?
 
 # ------------------------------------------------------------------
@@ -99,7 +116,7 @@ if rustc --edition "$EDITION" --test --crate-name rope_lib_tests "$ROOT/src/lib.
     -L "$SHIM" -o "$OUT/libtests" 2>&1 | sed 's/^/  /'; then
     echo
     echo "── 実行 (core/ + net/) ──"
-    "$OUT/libtests" --test-threads=1 || status=1
+    run_suite default "$OUT/libtests" || status=1
 else
     echo "❌ core/ のテストビルドに失敗"
     status=1
@@ -131,7 +148,7 @@ if rustc --edition "$EDITION" --cfg 'feature="http"' --test \
     -L "$SHIM" -o "$OUT/httptests" 2>&1 | sed 's/^/  /'; then
     echo
     echo "── 実行 (--features http) ──"
-    "$OUT/httptests" --test-threads=1 || status=1
+    run_suite http "$OUT/httptests" || status=1
 else
     echo "❌ --features http のテストビルドに失敗"
     status=1

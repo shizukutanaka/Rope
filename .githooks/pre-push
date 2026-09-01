@@ -20,7 +20,8 @@
 #
 # 1. rustfmt (構文と整形)
 # 2. オフライン型検査 — `src/` 全体を rustc に通す
-# 3. `src/` のテスト 358 件を**実際に実行** (core/ も含む)
+# 3. `src/` のテストを**実際に実行** (core/ も含む) し、件数を記録する
+# 6. 文書が書いた「テスト N 件」を、3 で記録した実測値と突き合わせる
 # 4. clippy + **MSRV 適合検査** (`clippy-driver` は registry 不要)
 # 5. `cargo` が使えるなら本物のゲート (build/test/clippy/fmt)
 #
@@ -46,35 +47,35 @@ fail() {
     exit 1
 }
 
-echo "── 1/8 rustfmt ──"
+echo "── 1/9 rustfmt ──"
 mapfile -t rs_files < <(git ls-files 'src/*.rs' 'src/**/*.rs' 'examples/*.rs' 2>/dev/null)
 if [ "${#rs_files[@]}" -gt 0 ]; then
     rustfmt --edition 2021 --check "${rs_files[@]}" || fail "rustfmt"
 fi
 echo "  OK"
 
-echo "── 2/8 オフライン型検査 ──"
+echo "── 2/9 オフライン型検査 ──"
 ./tools/offline-typecheck/check.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/check.sh
     fail "型検査"
 }
 echo "  OK"
 
-echo "── 3/8 テストを実行 (src/ 全体) ──"
+echo "── 3/9 テストを実行 (src/ 全体) ──"
 ./tools/offline-typecheck/run-tests.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/run-tests.sh
     fail "テスト"
 }
 echo "  OK"
 
-echo "── 4/8 clippy + MSRV $MSRV ──"
+echo "── 4/9 clippy + MSRV $MSRV ──"
 ./tools/offline-typecheck/lint.sh >/dev/null 2>&1 || {
     ./tools/offline-typecheck/lint.sh
     fail "clippy"
 }
 echo "  OK"
 
-echo "── 5/8 依存グラフの MSRV (助言) ──"
+echo "── 5/9 依存グラフの MSRV (助言) ──"
 # **push をブロックしない。** 理由は 2 つ:
 #   1. index.crates.io への到達性に依存するので、ネットワーク事情で
 #      push が止まるのは筋が悪い
@@ -91,7 +92,21 @@ else
 fi
 rm -f /tmp/rope-deps-msrv.$$
 
-echo "── 6/8 文書の file:line アンカー ──"
+echo "── 6/9 文書が書いた「テスト N 件」──"
+# 規範6 は「文書は実態と一致させる」と言うが、**件数は最も静かに古びる**。
+# 実測 (2026-09-01) で 6 箇所中 5 箇所が誤っており、同じリポジトリの中で
+# 358 / 671 / 236 の 3 つが同時に生きていた。しかも `ASSESSMENT.md` は
+# 「テスト件数は run-tests.sh が守る」と書いていた — 守っていなかった。
+# 3 で書き出した実測値と突き合わせる (再実行しないので追加コストは無い)。
+./tools/check-test-counts.sh >/dev/null 2>&1 || {
+    ./tools/check-test-counts.sh
+    echo
+    echo "   → 文書側の数字を実測に合わせてください (マーカー: <!-- tests:http --> 等)"
+    fail "テスト件数"
+}
+echo "  OK"
+
+echo "── 7/9 文書の file:line アンカー ──"
 # 規範3 は「発見は file:line で記録する。将来の実装者が必ず参照する」と言うが、
 # **コードを直すたび行番号はずれる**。実測 (2026-08-18) で 84 件中 48 件が
 # 誤った場所を指していた。参照される前提の記録が 6 割間違っている状態は、
@@ -105,7 +120,7 @@ echo "── 6/8 文書の file:line アンカー ──"
 }
 echo "  OK"
 
-echo "── 7/8 2 プロセス E2E ──"
+echo "── 8/9 2 プロセス E2E ──"
 # 「相手のマシンで実行される」を**プロセス境界を越えて**確かめる。
 # transport のテストは 1 プロセス内の 2 スレッドなので、ここでしか出ない
 # 不具合がある (実例: 貸し手が 127.0.0.1 にだけ bind していると、mDNS が
@@ -126,7 +141,7 @@ else
 fi
 rm -f /tmp/rope-e2e.$$
 
-echo "── 8/8 cargo (使えれば) ──"
+echo "── 9/9 cargo (使えれば) ──"
 if cargo check --all-targets --offline >/dev/null 2>&1; then
     echo "  cargo が使えます。本物のゲートを回します。"
     cargo test --all-targets || fail "cargo test"
