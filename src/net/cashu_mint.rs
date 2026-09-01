@@ -67,6 +67,56 @@ pub struct CashuClient {
     http: reqwest::Client,
 }
 
+/// ループバック宛か (ローカル mint でのテストは常に許す)。
+///
+/// `localhost` / `127.0.0.0/8` / `::1` を見る。名前解決はしない —
+/// **DNS で実 mint に向けられる余地を残さないため**、文字列の時点で判定する。
+pub fn is_loopback_mint(url: &str) -> bool {
+    let host = match url
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+    {
+        Some(h) => h,
+        None => return false,
+    };
+    // ポートとユーザ情報を落とす
+    let host = host.rsplit('@').next().unwrap_or(host);
+    let host = if let Some(stripped) = host.strip_prefix('[') {
+        // IPv6 リテラル
+        stripped.split(']').next().unwrap_or("")
+    } else {
+        host.split(':').next().unwrap_or("")
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host == "::1"
+        || host.strip_prefix("127.").is_some_and(|rest| {
+            rest.split('.').count() == 3 && rest.split('.').all(|o| o.parse::<u8>().is_ok())
+        })
+}
+
+/// **プレースホルダ ecash のまま実 mint に接続してよいか。**
+///
+/// 既定は false。`ROPE_ALLOW_PLACEHOLDER_ECASH=1` で明示的に外せる。
+///
+/// ## なぜこの門が要るのか
+///
+/// `core::ecash::build_proof` と本モジュールの `build_blinded_outputs` は
+/// **BDHKE のプレースホルダ**である (`docs/SURPLUS_AND_GAPS.md` §1.1)。
+/// `k256` をこの環境に追加できず、§1.1 が楕円曲線演算の手書きを禁じているため。
+///
+/// この状態で**実 mint に Lightning で入金する**と、返ってくる署名は
+/// でたらめな blinded message に対するものになり、**unblind できない proof**
+/// しか手に入らない。**入金した sats は取り戻せない。**
+///
+/// 転送層が `ROPE_ALLOW_PLAINTEXT` で平文を既定拒否しているのと同じ規律を、
+/// 金銭側にも適用する。判断は利用者に返すが、**黙って実 mint へ繋がない**。
+pub fn placeholder_ecash_allowed() -> bool {
+    std::env::var("ROPE_ALLOW_PLACEHOLDER_ECASH")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
 #[cfg(feature = "http")]
 impl CashuClient {
     /// 新規クライアント作成 (URL 検証含む)
@@ -80,6 +130,20 @@ impl CashuClient {
             anyhow::bail!("mint URL は http(s) のみ");
         }
         // 本番では http:// 拒否すべきだが、ローカル mint テストで使うので許可
+
+        // 🔴 BDHKE がプレースホルダのまま実 mint へ繋ぐと、入金した sats に
+        // 対して **unblind できない proof** しか返らず、資金が失われる
+        // (`placeholder_ecash_allowed` の doc を参照)。
+        // ループバック以外は既定で拒否する。
+        if !is_loopback_mint(&config.mint_url) && !placeholder_ecash_allowed() {
+            anyhow::bail!(
+                "実 mint ({}) への接続は既定で拒否しています。\n\
+                 BDHKE がプレースホルダのため、入金しても unblind できない proof \
+                 しか受け取れず、資金を失います (docs/SURPLUS_AND_GAPS.md §1.1)。\n\
+                 承知の上で試すなら ROPE_ALLOW_PLACEHOLDER_ECASH=1 を設定してください。",
+                config.mint_url
+            );
+        }
 
         let http = reqwest::Client::builder()
             .timeout(config.timeout)
@@ -593,14 +657,87 @@ mod tests {
         assert!(CashuClient::new(cfg).is_err());
     }
 
+    /// 遠隔 mint を使うテストは**門を明示的に外して**書く。
+    /// 外さないと `new` が拒否する — それがこの門の目的だから。
+    #[cfg(feature = "http")]
+    fn with_placeholder_ecash<T>(f: impl FnOnce() -> T) -> T {
+        std::env::set_var("ROPE_ALLOW_PLACEHOLDER_ECASH", "1");
+        let r = f();
+        std::env::remove_var("ROPE_ALLOW_PLACEHOLDER_ECASH");
+        r
+    }
+
     #[cfg(feature = "http")]
     #[test]
     fn test_url_validation_accepts_https() {
+        with_placeholder_ecash(|| {
+            let cfg = CashuClientConfig {
+                mint_url: "https://mint.example.com".to_string(),
+                ..Default::default()
+            };
+            assert!(CashuClient::new(cfg).is_ok());
+        });
+    }
+
+    /// 🔴 **BDHKE がプレースホルダのまま実 mint へ繋がせない。**
+    /// これを外すと、入金した sats に対して unblind できない proof しか
+    /// 返らず資金を失う (`docs/SURPLUS_AND_GAPS.md` §1.1)。
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_remote_mint_is_refused_by_default() {
+        std::env::remove_var("ROPE_ALLOW_PLACEHOLDER_ECASH");
         let cfg = CashuClientConfig {
             mint_url: "https://mint.example.com".to_string(),
             ..Default::default()
         };
-        assert!(CashuClient::new(cfg).is_ok());
+        // `CashuClient` は Debug を持たないので `unwrap_err()` は使えない
+        let msg = match CashuClient::new(cfg) {
+            Ok(_) => panic!("遠隔 mint が既定で通ってしまった"),
+            Err(e) => format!("{}", e),
+        };
+        assert!(msg.contains("既定で拒否"), "理由が利用者に分かる: {msg}");
+        assert!(
+            msg.contains("ROPE_ALLOW_PLACEHOLDER_ECASH"),
+            "外し方も示す: {msg}"
+        );
+    }
+
+    /// ループバックは門を外さなくても通る (ローカル mint での開発を妨げない)。
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_loopback_mint_needs_no_opt_in() {
+        std::env::remove_var("ROPE_ALLOW_PLACEHOLDER_ECASH");
+        for url in [
+            "http://localhost:3338",
+            "http://127.0.0.1:3338",
+            "http://[::1]:3338",
+        ] {
+            let cfg = CashuClientConfig {
+                mint_url: url.to_string(),
+                ..Default::default()
+            };
+            assert!(CashuClient::new(cfg).is_ok(), "{url} は通るべき");
+        }
+    }
+
+    /// ループバック判定が**文字列で**行われること。
+    /// DNS 解決に頼ると `localhost.evil.com` のような名前で実 mint へ
+    /// 向けられる余地が残る。
+    #[test]
+    fn test_loopback_detection_is_not_fooled_by_lookalikes() {
+        assert!(is_loopback_mint("http://localhost:3338"));
+        assert!(is_loopback_mint("https://127.0.0.1"));
+        assert!(is_loopback_mint("http://[::1]:3338"));
+        for bad in [
+            "https://localhost.evil.com",
+            "https://127.0.0.1.evil.com",
+            "https://mint.example.com",
+            "https://notlocalhost",
+            "https://user@evil.com",
+            "not a url",
+        ] {
+            assert!(!is_loopback_mint(bad), "{bad} をループバック扱いしない");
+        }
     }
 
     #[cfg(feature = "http")]
@@ -616,11 +753,13 @@ mod tests {
     #[cfg(feature = "http")]
     #[test]
     fn test_endpoint_construction_dedupes_slash() {
-        let cfg = CashuClientConfig {
-            mint_url: "https://mint.example.com/".to_string(),
-            ..Default::default()
-        };
-        let client = CashuClient::new(cfg).unwrap();
+        let client = with_placeholder_ecash(|| {
+            let cfg = CashuClientConfig {
+                mint_url: "https://mint.example.com/".to_string(),
+                ..Default::default()
+            };
+            CashuClient::new(cfg).unwrap()
+        });
         assert_eq!(
             client.endpoint("/v1/info"),
             "https://mint.example.com/v1/info"

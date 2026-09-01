@@ -139,11 +139,26 @@ CI remains the shipping gate.
 > return `PlaintextNotAllowed` unless it is `1`. The decision to send prompts
 > over an unencrypted LAN is handed to the operator with the reason stated,
 > rather than made silently.
+>
+> 🔴 **The money path had no equivalent guard until 2026-08-18 — and its failure
+> mode is worse than the transport's.** `CashuClient::new` would connect to *any*
+> mint URL while `build_blinded_outputs` is a placeholder. Deposit real sats over
+> Lightning into a real mint and the signature comes back over a garbage blinded
+> message: **you receive proofs you can never unblind. The sats are gone.**
+> The transport leaks a prompt; this destroys money.
+>
+> Now gated the same way: `cashu_mint::placeholder_ecash_allowed()` reads
+> `ROPE_ALLOW_PLACEHOLDER_ECASH`, and `CashuClient::new` **refuses any
+> non-loopback mint** without it, naming both the reason and the override.
+> Loopback (`localhost` / `127.0.0.0/8` / `::1`) is always allowed so local
+> mint development is unaffected. **The loopback test is on the URL string, not
+> DNS** — resolving would let `localhost.evil.com` through. Four tests cover it,
+> including lookalike hosts.
 
 **Original finding, kept for context:**
 - `src/core/ecash.rs:455-484` `build_proof` — Cashu BDHKE unblinding is
   `blake3::hash("C|keyset|amount|secret")` reshaped into secp256k1-point-shaped
-  bytes. Not real elliptic-curve math. Same in `src/net/cashu_mint.rs:520-556`
+  bytes. Not real elliptic-curve math. Same in `src/net/cashu_mint.rs:593-629`
   `build_blinded_outputs`.
 - `src/net/cashu_mint.rs:360-368` — NUT-07 proof-state check unimplemented by
   design (would need a `secp256k1` dep, deliberately not added).

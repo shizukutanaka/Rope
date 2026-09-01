@@ -297,6 +297,24 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Added
 
+- **🔴 実 mint への接続を既定で拒否する門** (`src/net/cashu_mint.rs`)。
+  **テストは実行して PASS** (668 件、うち `--features http` 側が 306→309)。
+  - **転送は `ROPE_ALLOW_PLAINTEXT` で守られていたのに、金銭側には同等の門が
+    無かった。** `CashuClient::new` はどんな mint URL にも繋げた
+  - **失敗の仕方が転送より悪い**: BDHKE がプレースホルダのまま実 mint へ
+    Lightning 入金すると、でたらめな blinded message に対する署名が返り、
+    **unblind できない proof しか手に入らない — 入金した sats は消える**。
+    転送の平文はプロンプトが漏れるだけだが、こちらは資金が失われる
+  - `placeholder_ecash_allowed()` (`ROPE_ALLOW_PLACEHOLDER_ECASH`) を新設し、
+    **ループバック以外を既定で拒否**。拒否メッセージは理由と外し方の両方を示す
+  - ループバック (`localhost`/`127.0.0.0/8`/`::1`) は門を外さなくても通るので、
+    ローカル mint での開発は妨げない
+  - **判定は URL 文字列で行う。** DNS を引くと `localhost.evil.com` のような
+    名前で実 mint へ向けられる余地が残る。そっくりなホスト名を含む
+    テスト 4 件で確認
+  - 既存の遠隔 mint テスト 2 件は門を明示的に外す形に書き換えた —
+    **外さないと拒否されるのがこの門の目的**だから
+
 - **⑤ `tools/check-doc-anchors.sh` — file:line アンカーの正しさをゲートで守る**
   (`SURPLUS_AND_GAPS.md` §1.18)。
   - 規範3 は「発見は file:line で記録する。**将来の実装者が必ず参照する**」と

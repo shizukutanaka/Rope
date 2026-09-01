@@ -15,7 +15,7 @@
   `blake3::hash(format!("C|{}|{}|{}", keyset_id, amount, secret))` から
   33バイト圧縮 secp256k1 point 風のバイト列 (`0x02` prefix + 32バイト) を
   組み立てているだけ。楕円曲線演算は一切行っていない。
-- `src/net/cashu_mint.rs:529-556` `build_blinded_outputs` — 同様に `B'`
+- `src/net/cashu_mint.rs:593-620` `build_blinded_outputs` — 同様に `B'`
   (blinded point) を `HashToCurve` 風の hex 文字列で偽装。
 - `src/net/cashu_mint.rs:361-368` — NUT-07 (`POST /v1/checkstate`, 二重使用
   検証) は `Ys` フィールド (`hash_to_curve(secret)`) を正しく送れないため
@@ -101,7 +101,7 @@ API を確認すること。
   自前実装の `hash_to_curve` が公式テストベクタと一致することを
   最初に検証する。ここが狂うと後続の署名検証が全て失敗する。
 
-### Step 2: Blinding — `build_blinded_outputs` (`cashu_mint.rs:529`) の実装
+### Step 2: Blinding — `build_blinded_outputs` (`cashu_mint.rs:593`) の実装
 
 - `r` (blinding factor) をランダム生成し、**`secret` と一緒に保持**する
   必要がある (現状の `Proof` 構造体には `r` を保持するフィールドが無い —
