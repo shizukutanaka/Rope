@@ -141,6 +141,7 @@ impl JobPolicy for LenderPolicy {
         _job: &str,
         model: &str,
         _p: &str,
+        _max_out: u32,
         budget: u64,
     ) -> Result<(), String> {
         if model != "demo" {

@@ -454,11 +454,19 @@ token** — now actually happens over the wire:
    one. **A real mint would reject it.** The plumbing is real; the money is not.
    This is the same blocker as §1.1 (`k256` unavailable) and is the single
    thing standing between v1 and a genuinely novel product.
-2. **There is no price negotiation.** No message proposes or accepts a price.
+2. **There is no price negotiation.** `[SUPERSEDED 2026-09-01 — see §1.22]`
+   No message proposes or accepts a price.
    `main.rs::price_for` applies a fixed rule — **1 sat per output token, capped
    by `--budget`** — and both sides simply assume it. `rope earn --rate`
    (sats/second) is **not consulted**, which is an inconsistency to resolve when
    a price message is added. Until then the lender takes whatever arrives.
+   **→ 2026-09-01: fixed, but not the way this item predicted (§1.22).**
+   `--rate` was deleted (a no-op whose unit — sats/second — cannot be priced
+   before execution), the rule was hoisted into
+   `transport::PRICE_PER_OUTPUT_TOKEN` where **both sides read it**, and the
+   lender now refuses underfunded jobs **before executing**. No new wire
+   message was needed: `budget_sats` already crosses before `accept`, and the
+   reject reason carries the required amount.
 3. **Escrow is deliberately NOT used on this path, and the reason is worth
    recording.** The escrow state machine protects the *borrower* against a
    lender who takes payment and never delivers. But in the implemented flow the
@@ -1069,7 +1077,7 @@ src/net/transport.rs` = **0 0**。
 A2 (TOFU) は「**誰か**」を見るが「**どれだけか**」を見ていない。
 信頼した相手が稼働時間を丸ごと食えるなら、その信頼判断は資源を守っていない。
 
-→ `PeerQuota` (`src/net/transport.rs:74`) を新設。`MAX_JOBS_PER_PEER` = 64。
+→ `PeerQuota` (`src/net/transport.rs:99`) を新設。`MAX_JOBS_PER_PEER` = 64。
 `LocalPolicy::accept` が信頼判断の直後・実行の前に `charge` を呼び、超過は
 既存の `Reject` 経路で借り手に理由ごと返る (`src/main.rs`)。
 
@@ -1098,6 +1106,82 @@ A2 (TOFU) は「**誰か**」を見るが「**どれだけか**」を見てい�
 
 なお**メモリ側は既に閉じていた** — `frame_len` が `MAX_PAYLOAD` を強制する
 (`src/net/wire.rs:396`)。残っていたのは時間の占有だけだった。
+
+
+### 1.22 CLI が印字する価格を、誰も使っていなかった `[FIXED 2026-09-01]` (ソクラテス問答)
+
+> **問**: `rope earn --rate 5` と打った利用者は「5 sats/秒で貸す」と読む。
+> **その通りに動くか?**
+> **答**: **動かない。** `rate_sats_per_sec` は `run_earn` が**印字するだけで
+> 捨てていた** — `serve_jobs` に渡っていない。貸し手は借り手が送ってきた額を
+> 何でも受け取る。**0 sats を含む。**
+
+これは規範6 (正直さの文化) の違反で、しかも **CLI の出力そのもの**にあった。
+`CLAUDE.md` 長所5 が「CLI 出力・README・コミットメッセージが実態と食い違う
+変更はしない」と名指ししている、まさにその場所である。
+
+**より重い方の帰結 (A9)**: 貸し手は**いくら貰えるのかを知らないまま計算を
+始めていた**。`JobPolicy::accept` に仕事量 (`max_output_tokens`) が渡って
+おらず、渡っていた `budget_sats` も `== 0` しか見ていなかった。
+つまり「1 sat 出す」と言えば、貸し手は 256 トークン分の計算をして
+1 sat を受け取る。§1.21 で回数に上限を付けたが、**1 回あたりの単価が
+守られていなければ意味が半分しか無い。**
+
+#### 問 (Musk ①): 直すには価格交渉メッセージが要るか?
+
+`ASSESSMENT.md` の改善点表 項目 4 は「価格交渉メッセージ / **ワイヤ形式の
+拡張**」と書いていた。
+
+> **答**: **要らなかった。** `JobRequest.budget_sats` は**実行前**に既に
+> ワイヤを渡り、`JobPolicy::accept` に届いている
+> (`src/net/transport.rs:343` の呼び出し)。貸し手は自分の希望額と比べて
+> `Reject` すればよく、**拒否理由に必要額を書けば借り手は次に正しい額を
+> 出せる**。交渉は既存のメッセージだけで成立する。
+> **新しいメッセージ型は 1 つも要らない。**
+
+#### 問 (Musk ①、2 つ目): では `--rate` の単位は正しいか?
+
+> **答**: **間違っている。** `--rate` は sats/**秒**だが、貸し手は実行前に
+> 所要秒数を知らない。知っているのは `max_output_tokens` である。
+> **秒あたりの価格は、実行前には値付けできない。**
+> 一方 `price_for` (`src/main.rs`) は既に**出力トークンあたり**で計算して
+> いた。ワイヤも借り手の実装もトークン建てで、**フラグの単位だけが
+> 違っていた。**
+
+#### 問 (Musk ②): では貸し手ごとの価格は要るか?
+
+> **答**: **v1 では要らない。** 貸し手ごとに値付けするには、借り手が繋ぐ前に
+> その価格を知る手段が要る — mDNS の広告にも `Hello` にも価格の欄は無く、
+> 足せばワイヤ形式の版上げになる。そして A8 (設定ゼロ) は、そもそも利用者に
+> 価格を決めさせない方を選ぶ。
+> **郵便料金のように一律にするのが、v1 では正しい。**
+
+#### 直した内容
+
+| 変更 | 場所 |
+|---|---|
+| `PRICE_PER_OUTPUT_TOKEN` = 1 sat を新設 (**両者が見る唯一の規則**) | `src/net/transport.rs:78` |
+| `required_payment(effective_max_output_tokens)` | `src/net/transport.rs:87` |
+| `JobPolicy::accept` に `max_output_tokens` を追加 (受けるかの判断に必要な仕事量) | `src/net/transport.rs:212` |
+| `LocalPolicy::accept` が**計算前に**必要額を検査し、不足なら必要額つきで `Reject` | `src/main.rs` |
+| `price_for` を定数へ一本化 (規則が 2 箇所に無いように) | `src/main.rs` |
+| **`--rate` を削除** (印字されるだけで参照されない no-op だった) | `src/main.rs` |
+| `run_earn` の表示を「出力トークン 1 個あたり N sats」に (実際に課金される価格) | `src/main.rs` |
+
+**テスト** (ハーネスで実行): `an_underfunded_job_is_refused_before_any_computation`
+— 予算 5 sats で 32 トークン分 (32 sats) を頼むと `Reject` になり、
+**`execute` が 1 度も呼ばれない**ことを確かめる。拒否理由に必要額 (32) が
+入ることも確かめる — これが「交渉」の実体である。
+
+#### 残っているもの
+
+- **貸し手ごとの価格は無い** (v2)。入れるなら mDNS の TXT に載せるのが素直で、
+  ワイヤ形式を触らずに済む
+- **借り手は払わないこともできる** — 貸し手は結果を先に渡すので、支払いが
+  来なければ `paid_sats = 0` になるだけ。これは §1.12 の escrow に関する
+  結論と同じ構造で、v1 は LAN の顔見知り (A2/TOFU) を前提にしている
+- `--rate` の削除は **CLI の破壊的変更**である (`rope earn --rate 5` は
+  引数エラーになる)。no-op なフラグを残す方が正直さの文化に反すると判断した
 
 
 ---

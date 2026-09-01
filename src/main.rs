@@ -54,7 +54,7 @@ macro_rules! capability_boundary {
   rope run                      デフォルトモデルで推論
   rope run mistral-7b -p 'こんにちは'
   rope earn                     GPU 貸出開始 (1 sat/秒)
-  rope earn --rate 5 --max-minutes 60")]
+  rope earn --max-minutes 60")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Verb>,
@@ -95,10 +95,6 @@ enum Verb {
 
     /// 自分の GPU を貸し出す
     Earn {
-        /// 1 秒あたりのレート (sats、デフォルト 1)
-        #[arg(long, default_value = "1")]
-        rate: u64,
-
         /// 最大稼働時間 (分)
         #[arg(long, default_value = "120")]
         max_minutes: u32,
@@ -143,7 +139,7 @@ fn run() -> Result<()> {
             privacy,
             verification,
         }) => run_inference(&model, &prompt, budget, &privacy, &verification),
-        Some(Verb::Earn { rate, max_minutes }) => run_earn(rate, max_minutes),
+        Some(Verb::Earn { max_minutes }) => run_earn(max_minutes),
     }
 }
 
@@ -748,8 +744,16 @@ fn try_offload_to_peer(
 /// 知っている前提で動いている。実際の市場価格を反映していない
 /// (`docs/V1_SCOPE.md` §4 の「1 ドル未満」の根拠は電力コストであって
 /// この規則ではない)。価格提示メッセージは v2 の課題。
+/// 実際に生成された分の対価。
+///
+/// **単価は `transport::PRICE_PER_OUTPUT_TOKEN` に一本化してある** — 以前は
+/// この関数だけが規則を持っており、貸し手側は自分がいくら貰えるのか
+/// 知らないまま計算していた (§1.22)。
+///
+/// `budget_sats` で頭打ちにするのは保険で、貸し手が `accept` で
+/// `required_payment` を確かめている以上、通常はここに掛からない。
 fn price_for(ex: &rope::net::transport::Executed, budget_sats: u64) -> u64 {
-    (ex.output_tokens as u64).min(budget_sats)
+    (rope::net::transport::PRICE_PER_OUTPUT_TOKEN * ex.output_tokens as u64).min(budget_sats)
 }
 
 /// ウォレットから `amount` 分の bearer token を取り出してワイヤ形式へ変換する。
@@ -891,7 +895,7 @@ fn run_local_inference_limited(
 // rope earn — GPU 貸出
 // ============================================================================
 
-fn run_earn(rate_sats_per_sec: u64, max_minutes: u32) -> Result<()> {
+fn run_earn(max_minutes: u32) -> Result<()> {
     use core::ecash::{format_ecash, load_ecash};
     use core::pair::{load_pair, save_pair, AcceptMode};
     use core::session::{format_session, Limits, Session, SessionState};
@@ -926,7 +930,13 @@ fn run_earn(rate_sats_per_sec: u64, max_minutes: u32) -> Result<()> {
     sess.save()?;
 
     println!("💰 GPU 貸出モード");
-    println!("  レート: {} sats/秒", rate_sats_per_sec);
+    // **表示する価格は、実際に課金される価格でなければならない** (規範6)。
+    // 以前ここは `--rate` (sats/秒) を印字していたが、その値はどこでも
+    // 参照されておらず、貸し手は 0 sats でも計算していた (§1.22)。
+    println!(
+        "  価格: 出力トークン 1 個あたり {} sats (v1 は一律)",
+        rope::net::transport::PRICE_PER_OUTPUT_TOKEN
+    );
     println!("  受付モード: {}", mgr.config.accept_mode);
     println!();
 
@@ -1026,6 +1036,7 @@ fn serve_jobs(max_minutes: u32, session: core::session::Session) -> Result<()> {
             job_id: &str,
             model: &str,
             _prompt: &str,
+            max_output_tokens: u32,
             budget_sats: u64,
         ) -> Result<(), String> {
             // A2: **計算を始める前に**、この相手の計算を受けるか決める。
@@ -1051,8 +1062,19 @@ fn serve_jobs(max_minutes: u32, session: core::session::Session) -> Result<()> {
             self.quota.borrow_mut().charge(peer_pubkey)?;
             // モデル名は外から来る文字列 — パスにする前に必ず無害化する (A9)
             rope::net::inference::safe_model_stem(model).map_err(|e| e.to_string())?;
-            if budget_sats == 0 {
-                return Err("予算が 0 sats".to_string());
+            // A9: **計算を始める前に、いくら貰えるのかを確かめる。**
+            // 頭打ち後のトークン数で見積もる (`execute` が実際に生成しうる上限)。
+            // 以前はここを見ておらず、貸し手は 0 sats でも計算していた (§1.22)。
+            let capped = max_output_tokens.min(self.max_output_tokens);
+            let required = rope::net::transport::required_payment(capped);
+            if budget_sats < required {
+                return Err(format!(
+                    "予算が足りません: {} sats 必要 (出力 {} トークン × {} sats)、提示は {} sats",
+                    required,
+                    capped,
+                    rope::net::transport::PRICE_PER_OUTPUT_TOKEN,
+                    budget_sats
+                ));
             }
             // 走らせる前にセッションへ job_id を刻む。緊急停止した時に
             // 借り手の escrow を引くキーはこれしかない (A9→A7)。
@@ -1389,8 +1411,7 @@ mod tests {
     fn test_cli_earn_defaults() {
         let cli = Cli::try_parse_from(["rope", "earn"]).unwrap();
         match cli.command {
-            Some(Verb::Earn { rate, max_minutes }) => {
-                assert_eq!(rate, 1);
+            Some(Verb::Earn { max_minutes }) => {
                 assert_eq!(max_minutes, 120);
             }
             _ => panic!("Expected Earn"),
@@ -1399,11 +1420,9 @@ mod tests {
 
     #[test]
     fn test_cli_earn_custom() {
-        let cli =
-            Cli::try_parse_from(["rope", "earn", "--rate", "5", "--max-minutes", "30"]).unwrap();
+        let cli = Cli::try_parse_from(["rope", "earn", "--max-minutes", "30"]).unwrap();
         match cli.command {
-            Some(Verb::Earn { rate, max_minutes }) => {
-                assert_eq!(rate, 5);
+            Some(Verb::Earn { max_minutes }) => {
                 assert_eq!(max_minutes, 30);
             }
             _ => panic!("Expected Earn"),

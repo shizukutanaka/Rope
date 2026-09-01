@@ -61,6 +61,31 @@ pub const PAYMENT_TIMEOUT: Duration = Duration::from_secs(5);
 /// ここで守れるのは「**1 つの鍵が貸し手の稼働時間を丸ごと食う**」ことだけ。
 pub const MAX_JOBS_PER_PEER: u32 = 64;
 
+/// 出力トークン 1 個の価格 (sats)。**v1 はプロトコル全体で固定**である。
+///
+/// ## なぜ「貸し手ごとの価格」ではないのか (Musk ①: 要件を疑う)
+///
+/// 貸し手ごとに値付けするには、借り手が**繋ぐ前にその価格を知る**手段が要る。
+/// v1 にはそれが無い — mDNS の広告にも `Hello` にも価格の欄は無く、足せば
+/// ワイヤ形式の版上げになる。そして A8 (設定ゼロ) は、そもそも利用者に
+/// 価格を決めさせない方を選ぶ。
+///
+/// **だから v1 は郵便料金のように一律にする。** 両者が同じ定数を見るので
+/// 交渉が要らない。以前は借り手側の `price_for` だけがこの規則を持ち、
+/// **貸し手はいくら貰えるのか知らないまま計算していた** (§1.22)。
+///
+/// 貸し手ごとの価格は v2 の項目。入れるなら mDNS の TXT に載せるのが素直で、
+/// ワイヤ形式を触らずに済む。
+pub const PRICE_PER_OUTPUT_TOKEN: u64 = 1;
+
+/// この依頼を受けるなら最低いくら必要か (sats)。
+///
+/// 引数は**実際に生成しうる上限**であって、借り手の希望値ではない。
+/// 貸し手は自分の上限で頭打ちにするので、そこで課金しないと過大請求になる。
+pub fn required_payment(effective_max_output_tokens: u32) -> u64 {
+    PRICE_PER_OUTPUT_TOKEN * effective_max_output_tokens as u64
+}
+
 /// 「この鍵は何回走らせたか」を数えるだけの器 (A9)。
 ///
 /// **A2 (TOFU) は「誰か」を見るが「どれだけか」を見ていない。** 信頼した相手が
@@ -188,12 +213,17 @@ pub trait JobPolicy {
     /// 貸し手が緊急停止した時に「今どのジョブを走らせていたか」が分からないと、
     /// 借り手の escrow を返金できない (`A9→A7`,
     /// `docs/SURPLUS_AND_GAPS.md` §1.10)。
+    ///
+    /// `max_output_tokens` を渡すのは、**受けるかどうかの判断に必要な仕事量が
+    /// それだから**である。これが無いと貸し手は「いくら貰えるのか」を
+    /// 知らないまま計算を始めることになる (A9, §1.22)。
     fn accept(
         &self,
         peer_pubkey: &str,
         job_id: &str,
         model: &str,
         prompt: &str,
+        max_output_tokens: u32,
         budget_sats: u64,
     ) -> Result<(), String>;
 
@@ -310,7 +340,14 @@ pub fn serve_connection(
 
     // 4. 受けるか判断して、受けるなら走らせる
     let decision = policy
-        .accept(&peer_pubkey, &job_id, &model, &prompt, budget_sats)
+        .accept(
+            &peer_pubkey,
+            &job_id,
+            &model,
+            &prompt,
+            max_output_tokens,
+            budget_sats,
+        )
         .and_then(|_| policy.execute(&model, &prompt, max_output_tokens));
 
     match decision {
@@ -542,6 +579,7 @@ mod tests {
             _job: &str,
             model: &str,
             prompt: &str,
+            _max_out: u32,
             budget: u64,
         ) -> Result<(), String> {
             if model != "demo" {
@@ -967,8 +1005,16 @@ mod payment_tests {
         received: &'static AtomicU64,
     }
     impl JobPolicy for PayingPolicy {
-        fn accept(&self, pk: &str, j: &str, m: &str, p: &str, b: u64) -> Result<(), String> {
-            self.inner.accept(pk, j, m, p, b)
+        fn accept(
+            &self,
+            pk: &str,
+            j: &str,
+            m: &str,
+            p: &str,
+            n: u32,
+            b: u64,
+        ) -> Result<(), String> {
+            self.inner.accept(pk, j, m, p, n, b)
         }
         fn execute(&self, m: &str, p: &str, n: u32) -> Result<Executed, String> {
             self.inner.execute(m, p, n)
@@ -1087,8 +1133,16 @@ mod payment_tests {
             current: std::cell::RefCell<Option<String>>,
         }
         impl JobPolicy for CountingPolicy {
-            fn accept(&self, pk: &str, j: &str, m: &str, p: &str, b: u64) -> Result<(), String> {
-                self.inner.accept(pk, j, m, p, b)
+            fn accept(
+                &self,
+                pk: &str,
+                j: &str,
+                m: &str,
+                p: &str,
+                n: u32,
+                b: u64,
+            ) -> Result<(), String> {
+                self.inner.accept(pk, j, m, p, n, b)
             }
             fn execute(&self, m: &str, p: &str, n: u32) -> Result<Executed, String> {
                 // 本番の `LocalPolicy::execute` と同じ判断:
@@ -1293,5 +1347,106 @@ mod resource_tests {
         // 上限 0 は「1 件も受けない」— 既定値を 0 にすれば貸出を止められる
         let mut none = PeerQuota::with_limit(0);
         assert!(none.charge("0a").is_err());
+    }
+
+    /// **払えない依頼は、計算する前に断る** (A9, §1.22)。
+    ///
+    /// 以前は貸し手が「いくら貰えるのか」を知らないまま計算していた —
+    /// `accept` に仕事量 (`max_output_tokens`) が渡っていなかったため。
+    /// 予算 0 でも 1 sat でも、貸し手はまず計算し、その後で来なかった支払いを
+    /// `paid_sats = 0` と記録するだけだった。
+    #[test]
+    fn an_underfunded_job_is_refused_before_any_computation() {
+        /// 価格だけを見る方針 (`main.rs::LocalPolicy` と同じ判断を、
+        /// エンジン無しで再現する)。**実行されたら記録に残る。**
+        struct PricedPolicy {
+            max_output_tokens: u32,
+            executed: std::cell::Cell<bool>,
+        }
+        impl JobPolicy for PricedPolicy {
+            fn accept(
+                &self,
+                _pk: &str,
+                _j: &str,
+                _m: &str,
+                _p: &str,
+                max_out: u32,
+                budget: u64,
+            ) -> Result<(), String> {
+                let capped = max_out.min(self.max_output_tokens);
+                let required = required_payment(capped);
+                if budget < required {
+                    return Err(format!("予算が足りません: {} sats 必要", required));
+                }
+                Ok(())
+            }
+            fn execute(&self, _m: &str, _p: &str, n: u32) -> Result<Executed, String> {
+                self.executed.set(true);
+                Ok(Executed {
+                    text: "x".into(),
+                    prompt_tokens: 1,
+                    output_tokens: n,
+                    forward_passes: n,
+                })
+            }
+        }
+
+        // 貸し手は最大 32 トークン出す → 32 sats 要る。借り手は 5 sats しか出さない。
+        assert_eq!(required_payment(32), 32 * PRICE_PER_OUTPUT_TOKEN);
+
+        with_plaintext(|| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                std::env::set_var("ROPE_ALLOW_PLAINTEXT", "1");
+                let (mut s, _) = listener.accept().unwrap();
+                let me = NodeIdentity {
+                    node_id: "lender".into(),
+                    pubkey: "0a".into(),
+                };
+                let policy = PricedPolicy {
+                    max_output_tokens: 32,
+                    executed: std::cell::Cell::new(false),
+                };
+                let served = serve_connection(&mut s, &me, &FakeSig(0x0a), &tofu, &policy).unwrap();
+                (served, policy.executed.get())
+            });
+
+            let mut c = TcpStream::connect(addr).unwrap();
+            let me = NodeIdentity {
+                node_id: "borrower".into(),
+                pubkey: "0b".into(),
+            };
+            let err = request_job(
+                &mut c,
+                &me,
+                &FakeSig(0x0b),
+                &tofu,
+                None,
+                "j",
+                "demo",
+                "ab",
+                100, // 100 欲しいが貸し手は 32 で頭打ちにする
+                5,   // 5 sats しか出さない
+                &mut |_| vec![],
+            )
+            .unwrap_err();
+
+            match err {
+                // 断る理由に**必要額**が入っている — 借り手は次に正しい額を出せる。
+                // これで価格交渉は成立する。**新しいメッセージ型は要らなかった。**
+                TransportError::Rejected(r) => {
+                    assert!(r.contains("32"), "必要額が理由に入る: {r}")
+                }
+                o => panic!("Reject を期待: {o}"),
+            }
+
+            let (served, executed) = server.join().unwrap();
+            assert!(!served.accepted);
+            assert!(
+                !executed,
+                "**1 度も計算していない** — これが守りたかったこと"
+            );
+        });
     }
 }
