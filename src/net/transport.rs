@@ -19,9 +19,9 @@
 //! ([`plaintext_allowed`])。判断を利用者に返すのであって、黙って
 //! 平文で流すのではない。
 
-use std::io::{self};
+use std::io::{self, Read};
 use std::net::TcpStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::wire::{
     read_frame, read_frame_bytes, verify_hello, write_frame, FrameSigner, FrameVerifier, Message,
@@ -134,6 +134,59 @@ impl PeerQuota {
     /// この鍵に対して既に走らせた件数。
     pub fn served(&self, peer_pubkey: &str) -> u32 {
         self.served.get(peer_pubkey).copied().unwrap_or(0)
+    }
+}
+
+/// **フレーム 1 つを読み切るまでの合計時間**を締切で縛る `Read` ラッパ (A9)。
+///
+/// ## なぜ `set_read_timeout` だけでは足りないか
+///
+/// `set_read_timeout` は **read 1 回ごと**の上限であって、フレーム全体の
+/// 締切ではない。上限が 5 秒でも、**500ms おきに 1 バイトずつ送る相手には
+/// 一度も発火しない** — 各 read は常に期限内に返るからである。
+/// 貸し手は無限に縛られる (`serve_jobs` は直列なので、1 本で稼働時間を
+/// 丸ごと潰せる)。古典的な slow-loris である。
+///
+/// ここは read のたびに「締切までの残り」を計算し、**それをソケットの
+/// read タイムアウトとして張り直す**。残りが尽きれば
+/// [`io::ErrorKind::TimedOut`] を返す。結果として、フレーム 1 つに
+/// かかる合計時間が締切そのもので抑えられる。
+///
+/// ## なぜ借り手側には使わないか
+///
+/// 借り手は**貸し手の計算が終わるのを待つ**ので、最初の 1 バイトまでの
+/// 時間が原理的に読めない。全体締切を張ると遅いモデルで正当な依頼が切れる。
+/// また借り手は自分から繋いだ側で、攻撃対象としての価値が低い。
+/// **この非対称は意図であって漏れではない。**
+struct DeadlineReader<'a> {
+    stream: &'a TcpStream,
+    deadline: Instant,
+}
+
+impl<'a> DeadlineReader<'a> {
+    fn new(stream: &'a TcpStream, budget: Duration) -> Self {
+        Self {
+            stream,
+            deadline: Instant::now() + budget,
+        }
+    }
+}
+
+impl Read for DeadlineReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "フレーム全体の締切を超えました",
+            ));
+        }
+        // `set_read_timeout(0)` は「無制限」ではなく**無効値**として拒否される
+        // プラットフォームがある。1ms 未満は 1ms に切り上げる。
+        let slice = left.max(Duration::from_millis(1));
+        self.stream.set_read_timeout(Some(slice))?;
+        // `impl Read for &TcpStream` を使う (&mut を持たなくても読める)
+        (&*self.stream).read(buf)
     }
 }
 
@@ -301,7 +354,13 @@ pub fn serve_connection(
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
 
     // 1. Hello (自己署名) — 鍵はメッセージの中にある
-    let hello_frame = read_frame_bytes(stream)?;
+    //
+    // `DeadlineReader` で包むのは、`set_read_timeout` が **read 1 回ごと**の
+    // 上限でしかないため。包まないと、1 バイトずつ滴下する相手を止められない。
+    let hello_frame = {
+        let mut r = DeadlineReader::new(stream, HANDSHAKE_TIMEOUT);
+        read_frame_bytes(&mut r)?
+    };
     let hello = verify_hello(&hello_frame, make_verifier)?;
     let (peer_node_id, peer_pubkey) = match hello {
         Message::Hello {
@@ -326,7 +385,10 @@ pub fn serve_connection(
     //    ここで待つ理由は往復の遅延しか無い。
     let verifier = make_verifier(&peer_pubkey)
         .ok_or_else(|| TransportError::UntrustedPeer(peer_pubkey.clone()))?;
-    let req = read_frame(stream, verifier.as_ref())?;
+    let req = {
+        let mut r = DeadlineReader::new(stream, HANDSHAKE_TIMEOUT);
+        read_frame(&mut r, verifier.as_ref())?
+    };
     let (job_id, model, prompt, max_output_tokens, budget_sats) = match req {
         Message::JobRequest {
             job_id,
@@ -366,8 +428,8 @@ pub fn serve_connection(
             // 支払いを待つ。**来なくてもエラーにはしない** — 既に計算は
             // 終わっており、借り手が落ちただけかもしれない。取り損ねた事実を
             // `paid_sats = 0` として返し、判断は呼び出し元に委ねる。
-            let _ = stream.set_read_timeout(Some(PAYMENT_TIMEOUT));
-            let paid_sats = match read_frame(stream, verifier.as_ref()) {
+            let mut pay_reader = DeadlineReader::new(stream, PAYMENT_TIMEOUT);
+            let paid_sats = match read_frame(&mut pay_reader, verifier.as_ref()) {
                 Ok(Message::Payment {
                     job_id: pid,
                     proofs,
@@ -1446,6 +1508,101 @@ mod resource_tests {
             assert!(
                 !executed,
                 "**1 度も計算していない** — これが守りたかったこと"
+            );
+        });
+    }
+    /// **1 バイトずつ滴下する借り手も、貸し手を縛れない** (A9, §1.21)。
+    ///
+    /// これは `a_silent_borrower_...` では捕まらない攻撃である。黙る相手は
+    /// `set_read_timeout` で切れるが、**500ms おきに 1 バイト送る相手は各 read が
+    /// 常に期限内に返るので、1 回ごとの上限は一度も発火しない** —
+    /// 貸し手は無限に縛られる (古典的な slow-loris)。
+    ///
+    /// `DeadlineReader` がフレーム全体の締切を張ることで塞いだ。
+    ///
+    /// **下限も見る**のが肝心 — 3 秒未満で返ったなら「締切が効いた」のではなく
+    /// 「別の理由で即失敗した」だけで、このテストは何も確かめていないことになる。
+    #[test]
+    fn a_byte_dripping_borrower_cannot_hold_the_lender_open() {
+        with_plaintext(|| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                std::env::set_var("ROPE_ALLOW_PLAINTEXT", "1");
+                let (mut s, _) = listener.accept().unwrap();
+                let me = NodeIdentity {
+                    node_id: "lender".into(),
+                    pubkey: "0a".into(),
+                };
+                let policy = RealPolicy {
+                    engine: engine(),
+                    max_prompt: 4096,
+                };
+                let started = std::time::Instant::now();
+                let r = serve_connection(&mut s, &me, &FakeSig(0x0a), &tofu, &policy);
+                (r.is_err(), started.elapsed())
+            });
+
+            // 滴下する借り手。**本物の Hello フレームを 1 バイトずつ送る。**
+            //
+            // 🔴 ここは最初「魔法バイト + 0 の羅列」にしていた。それだと
+            // ヘッダ 11 バイトが揃った時点で `UnsupportedVersion` になって
+            // 5.5 秒で返り、**締切が効いていなくてもテストが通ってしまう**。
+            // 実際そうなっていたのを変異検査で見つけた (§1.21)。
+            // 正しいフレームなら貸し手は最後まで読もうとするので、
+            // **止まる理由は締切しか無くなる。**
+            let drip = std::thread::spawn(move || {
+                use std::io::Write;
+                let frame = Message::Hello {
+                    node_id: "borrower".into(),
+                    pubkey: "0b".into(),
+                    nonce: String::new(),
+                }
+                .encode(&FakeSig(0x0b))
+                .expect("encode");
+                // 500ms × フレーム長 ≫ HANDSHAKE_TIMEOUT。締切が無ければ
+                // 貸し手は下の 15 秒上限まで付き合わされる。
+                assert!(
+                    frame.len() as u64 * 500 > 15_000,
+                    "フレームが短すぎて滴下の意味が無い ({} バイト)",
+                    frame.len()
+                );
+                let mut c = TcpStream::connect(addr).unwrap();
+                let began = std::time::Instant::now();
+                for b in frame {
+                    if began.elapsed() >= Duration::from_secs(15) {
+                        break; // テストが暴走しないための保険
+                    }
+                    if c.write_all(&[b]).is_err() || c.flush().is_err() {
+                        break; // 貸し手が切った = 締切が効いた
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            });
+
+            let (errored, waited) = server.join().unwrap();
+            let _ = drip.join();
+
+            assert!(errored, "滴下する相手はエラーとして切られる");
+            assert!(
+                waited < Duration::from_secs(10),
+                "フレーム全体の締切が効いていない — {:?} 待った \
+                 (1 回ごとの上限しか無いと、ここは 15 秒でも終わらない)",
+                waited
+            );
+            // 締切 (5 秒) の付近で返っているはず。ヘッダ拒否や EOF で
+            // 返っているなら、この幅から外れる。
+            assert!(
+                waited < HANDSHAKE_TIMEOUT + Duration::from_secs(2),
+                "締切 {:?} の付近で返るべきだが {:?} 待った",
+                HANDSHAKE_TIMEOUT,
+                waited
+            );
+            assert!(
+                waited > Duration::from_secs(3),
+                "3 秒未満で返ったのは締切ではなく別の理由 — テストが何も \
+                 確かめていない ({:?})",
+                waited
             );
         });
     }
