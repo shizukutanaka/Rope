@@ -452,6 +452,19 @@ pub fn matmul(out: &mut [f32], x: &[f32], w: &[f32], d: usize, n: usize) {
     }
 }
 
+/// SwiGLU のゲート: `gate[i] = SiLU(gate[i]) * up[i]`、`SiLU(v) = v * sigmoid(v)`。
+///
+/// llama2.c と同じ FFN の要である。以前ここは `forward` の中に直書きされていて
+/// (数値照合が無かった、§1.25 の残り)、独立した関数として**手計算した定数**で
+/// 照合するには、まず `rmsnorm`/`matmul`/`softmax` と同じ形に切り出す必要が
+/// あった。挙動はこの抽出の前後で変えていない (直書きしていた式そのまま)。
+pub fn swiglu(gate: &mut [f32], up: &[f32]) {
+    for i in 0..gate.len() {
+        let v = gate[i];
+        gate[i] = v * (1.0 / (1.0 + (-v).exp())) * up[i];
+    }
+}
+
 // ============================================================================
 // 実行状態
 // ============================================================================
@@ -623,10 +636,7 @@ impl Model {
                 dim,
                 hidden,
             );
-            for i in 0..hidden {
-                let v = state.hb[i];
-                state.hb[i] = v * (1.0 / (1.0 + (-v).exp())) * state.hb2[i];
-            }
+            swiglu(&mut state.hb, &state.hb2);
             matmul(
                 &mut state.xb,
                 &state.hb,
@@ -1255,6 +1265,39 @@ mod tests {
         let mut out = [0.0f32; 2];
         matmul(&mut out, &x, &w, 2, 2);
         assert_eq!(out, [17.0, 39.0]);
+    }
+
+    /// **SwiGLU のゲートを手計算の定数で固定する** (§1.25 の残り)。
+    ///
+    /// `sigmoid(1) = 0.7310586`, `sigmoid(-1) = 0.2689414`, `sigmoid(0) = 0.5`
+    /// は Rust の実装を通さない、独立に知られた定数。
+    /// - v=1: SiLU(1) = 1 · 0.7310586 = 0.7310586 → up=2.0 で out = 1.4621172
+    /// - v=-1: SiLU(-1) = -1 · 0.2689414 = -0.2689414 → up=3.0 で out = -0.8068242
+    /// - v=0: SiLU(0) = 0 → up が何であっても 0 (ゲートが全閉)
+    #[test]
+    fn swiglu_matches_hand_computation() {
+        let mut gate = [1.0f32, -1.0, 0.0];
+        let up = [2.0f32, 3.0, 100.0];
+        swiglu(&mut gate, &up);
+        assert!((gate[0] - 1.4621172).abs() < 1e-5, "{:?}", gate);
+        assert!((gate[1] - (-0.8068242)).abs() < 1e-5, "{:?}", gate);
+        assert!(gate[2].abs() < 1e-6, "v=0 はゲートが全閉: {:?}", gate);
+    }
+
+    /// **ゲートと `up` を取り違えると出力が変わる** — silu を掛けずに素通しする
+    /// 実装との違いを見る。SiLU(2) ≈ 1.7616 なので `2·up` (掛け忘れ) とは
+    /// 必ずずれる。
+    #[test]
+    fn swiglu_actually_gates_not_just_passes_through() {
+        let mut gate = [2.0f32];
+        let up = [5.0f32];
+        swiglu(&mut gate, &up);
+        // v · up (ゲート忘れ) なら 10.0 になる。SiLU を掛けているので違う値になる。
+        assert!(
+            (gate[0] - 10.0).abs() > 1.0,
+            "ゲートを掛け忘れると素通しの 10.0 に一致してしまう: {:?}",
+            gate
+        );
     }
 
     #[test]

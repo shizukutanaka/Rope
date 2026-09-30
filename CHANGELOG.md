@@ -168,6 +168,15 @@ clippy lint の目視確認) のみ実施。ビルド可能な環境での再検
 
 ### Added
 
+- **SwiGLU に数値の照合を足した — W9 を解消** (`SURPLUS_AND_GAPS.md` §1.25 の続き)。
+  **型検査 + ハーネスでテスト実行 PASS (320 件)。cargo は未検証。**
+  ラウンド 6 で「参照式を書き下すと同じ式を 2 度書く」と残した判断は、調べずに
+  書いたもので誤りだった。`swiglu` を純関数に切り出し (式は直書きのまま、挙動不変)、
+  既知の sigmoid 定数で照合。変異検査: ゲート掛け忘れ / sigmoid 符号反転を
+  いずれも検出。
+
+### Added
+
 - **🔴 `tools/check-test-counts.sh` — 文書が書いた「テスト N 件」を実測値と
   突き合わせる** (`SURPLUS_AND_GAPS.md` §1.23)。push 前ゲートの 6/9。
   ソクラテス問答「`ASSESSMENT.md` §4 は『テスト件数は run-tests.sh が守る』と
