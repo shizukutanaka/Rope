@@ -307,7 +307,7 @@ README の 6 つの約束のうち、他の 5 つ (他人GPU・TEE プライバ�
 | `step_identity` (`first_run.rs:312`) | — (A8 固有) | **本物**。鍵生成・設定作成を質問ゼロで実行 |
 | `step_discovery_start` (`first_run.rs:326`) | A1 | stage 遷移のみ。探索 I/O なし |
 | `step_discovery_complete` (`first_run.rs:342`) | A1 | `pair.paired` を読んで VRAM 最大のピアを選ぶ (`first_run.rs:405-412`)。**発見ではなく既存状態の参照**。空ならローカルへフォールバック |
-| `step_attest` (`first_run.rs:448`) | A6 | ピア有無で TEE 種別を決める。コード自身が「**暫定: ピア有無で TEE 種別を決定 (実運用は Bob 側 GPU 種別を取得)**」と明記 (`first_run.rs:448-449`) |
+| ~~`step_attest`~~ → 2026-09-01 に `step_privacy_check` へ置換 (§1.24。以下は置換前の監査記録) (`first_run.rs:427`) | A6 | ピア有無で TEE 種別を決める。コード自身が「**暫定: ピア有無で TEE 種別を決定 (実運用は Bob 側 GPU 種別を取得)**」と明記 (`first_run.rs:448-449`) |
 | `step_build_intent` (`first_run.rs:448`) | — | `Intent` を組み立てる。**本物** (型としては完全) |
 | `step_demo_completed` (`first_run.rs:480`) | **A3** | 引数で渡された文字列を保存するだけ (`first_run.rs:493`)。**推論は行わない** — 呼び出し元 (`main.rs`) が `sample_haiku_response()` の固定文を渡す |
 | `step_finale` (`first_run.rs:493`) | — | 完了画面の組み立て |
